@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 import { eq, sql } from "drizzle-orm";
-import { Database, createRedis } from "../db";
+import { Database, kvCache } from "../db";
 import { newsItems, systemState } from "../db/schema";
 
 // Forum sources to scrape
@@ -308,8 +308,8 @@ async function acquireLock(db: Database): Promise<boolean> {
 			await db.insert(systemState).values({
 				jobName: JOB_NAME,
 				isRunning: true,
-				lastRunStartedAt: new Date(),
-				updatedAt: new Date(),
+				lastRunStartedAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
 			});
 			return true;
 		}
@@ -331,7 +331,7 @@ async function acquireLock(db: Database): Promise<boolean> {
 				.set({
 					isRunning: false,
 					lastError: 'Stale lock detected and reset',
-					updatedAt: new Date(),
+					updatedAt: new Date().toISOString(),
 				})
 				.where(eq(systemState.jobName, JOB_NAME));
 		}
@@ -340,9 +340,9 @@ async function acquireLock(db: Database): Promise<boolean> {
 			.update(systemState)
 			.set({
 				isRunning: true,
-				lastRunStartedAt: new Date(),
+				lastRunStartedAt: new Date().toISOString(),
 				lastError: null,
-				updatedAt: new Date(),
+				updatedAt: new Date().toISOString(),
 			})
 			.where(eq(systemState.jobName, JOB_NAME));
 
@@ -365,9 +365,9 @@ async function releaseLock(
 			.update(systemState)
 			.set({
 				isRunning: false,
-				lastRunCompletedAt: error ? undefined : new Date(),
+				lastRunCompletedAt: error ? undefined : new Date().toISOString(),
 				lastError: error?.message || null,
-				updatedAt: new Date(),
+				updatedAt: new Date().toISOString(),
 			})
 			.where(eq(systemState.jobName, JOB_NAME));
 	} catch (e) {
@@ -417,35 +417,25 @@ async function scrapeIndexPage(
  * Always invalidates the "all" cache, plus caches for source types that had new items
  */
 async function invalidateNewsCache(
-	redisUrl: string,
-	redisToken: string,
+	kv: KVNamespace,
 	sourceTypesWithNewItems: Set<string>,
 ): Promise<void> {
-	try {
-		const redis = createRedis(redisUrl, redisToken);
+	const keysToDelete: string[] = [];
 
-		const keysToDelete: string[] = [];
+	// Always invalidate the "all" cache (no sourceType filter)
+	keysToDelete.push("news:list");
 
-		// Always invalidate the "all" cache (no sourceType filter)
-		keysToDelete.push("news:list");
-
-		// Invalidate caches for specific source types that had new items
-		for (const sourceType of sourceTypesWithNewItems) {
-			keysToDelete.push(`news:list:source:${sourceType}`);
-		}
-
-		// Delete all collected keys
-		if (keysToDelete.length > 0) {
-			await redis.del(...keysToDelete);
-		}
-
-		console.log(`[${JOB_NAME}] Cache invalidated: ${keysToDelete.length} keys deleted`, {
-			sourceTypes: Array.from(sourceTypesWithNewItems),
-		});
-	} catch (error) {
-		console.error(`[${JOB_NAME}] Failed to invalidate cache:`, error);
-		// Don't fail the job if cache invalidation fails
+	// Invalidate caches for specific source types that had new items
+	for (const sourceType of sourceTypesWithNewItems) {
+		keysToDelete.push(`news:list:source:${sourceType}`);
 	}
+
+	// Delete all collected keys using KV
+	await kvCache.deleteMany(kv, keysToDelete);
+
+	console.log(`[${JOB_NAME}] Cache invalidated: ${keysToDelete.length} keys deleted`, {
+		sourceTypes: Array.from(sourceTypesWithNewItems),
+	});
 }
 
 /**
@@ -453,9 +443,8 @@ async function invalidateNewsCache(
  */
 export async function runNewsScraper(
 	db: Database,
+	kv?: KVNamespace,
 	poeCookie?: string,
-	redisUrl?: string,
-	redisToken?: string,
 ): Promise<{
 	success: boolean;
 	scraped: number;
@@ -510,11 +499,11 @@ export async function runNewsScraper(
 					title: item.title,
 					url: item.url,
 					author: item.author,
-					postedAt: item.postedAt,
-					scrapedAt: new Date(),
+					postedAt: item.postedAt?.toISOString() || null,
+					scrapedAt: new Date().toISOString(),
 					preview: content?.preview || null,
 					wordCount: content?.wordCount || 0,
-					contentFetchedAt: new Date(),
+					contentFetchedAt: new Date().toISOString(),
 					isActive: true,
 				});
 
@@ -536,8 +525,8 @@ export async function runNewsScraper(
 		console.log(`[${JOB_NAME}] Completed: ${totalScraped} scraped, ${totalNew} new items inserted`);
 
 		// Invalidate cache if new items were added
-		if (totalNew > 0 && redisUrl && redisToken) {
-			await invalidateNewsCache(redisUrl, redisToken, sourceTypesWithNewItems);
+		if (totalNew > 0 && kv) {
+			await invalidateNewsCache(kv, sourceTypesWithNewItems);
 		}
 	} catch (error) {
 		jobError = error instanceof Error ? error : new Error(String(error));

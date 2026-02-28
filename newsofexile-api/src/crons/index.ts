@@ -7,13 +7,12 @@ import { runNewsScraper } from "./newsScraper";
  * 1. Scrapes index pages from all 4 POE forums
  * 2. For each new item, immediately fetches preview + word count
  * 3. Inserts with all data in one statement
- * 4. Invalidates Redis cache when new items are detected
+ * 4. Invalidates KV cache when new items are detected
  */
 export async function runCronJobs(
 	db: Database,
+	kv?: KVNamespace,
 	poeCookie?: string,
-	redisUrl?: string,
-	redisToken?: string,
 ): Promise<{
 	newsScraper: {
 		success: boolean;
@@ -25,7 +24,7 @@ export async function runCronJobs(
 	console.log("[CronManager] Starting scheduled cron job");
 
 	// Run the unified news scraper
-	const newsScraper = await runNewsScraper(db, poeCookie, redisUrl, redisToken);
+	const newsScraper = await runNewsScraper(db, kv, poeCookie);
 
 	console.log("[CronManager] Completed cron job", {
 		newsScraper,

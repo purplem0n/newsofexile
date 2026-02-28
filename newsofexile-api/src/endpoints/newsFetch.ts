@@ -1,7 +1,7 @@
 import { Num, OpenAPIRoute, Str } from "chanfana";
 import { eq, and, desc } from "drizzle-orm";
 import { z } from "zod";
-import { createDb, createRedis } from "../db";
+import { createDb, kvCache } from "../db";
 import { newsItems } from "../db/schema";
 import { type AppContext, SourceType } from "../types";
 
@@ -70,30 +70,37 @@ export class NewsFetch extends OpenAPIRoute {
       // Retrieve the validated parameters
       const { sourceType } = data.query;
 
-      // Initialize Redis client
-      const redis = createRedis(
-        c.env.UPSTASH_REDIS_REST_URL,
-        c.env.UPSTASH_REDIS_REST_TOKEN,
-      );
-
       // Generate cache key (simple - no cursor)
       const cacheKey = generateCacheKey(sourceType);
 
-      // Try to get cached response
-      let cached: unknown = null;
-      try {
-        cached = await redis.get(cacheKey);
-      } catch (redisError) {
-        console.error("[Redis] Failed to get cached data:", redisError);
-        // Continue without cache - don't fail the request
-      }
+      // Try to get cached response from KV
+      const cached = await kvCache.get<{
+        success: boolean;
+        data: {
+          items: Array<{
+            id: number;
+            sourceId: string;
+            sourceType: string;
+            title: string;
+            url: string;
+            author: string | null;
+            preview: string | null;
+            wordCount: number | null;
+            postedAt: string | null;
+            scrapedAt: string;
+            contentFetchedAt: string | null;
+            isActive: boolean;
+          }>;
+        };
+      }>(c.env.CACHE, cacheKey);
+
       if (cached) {
         // Return cached data directly
         return cached;
       }
 
-      // Initialize database connection
-      const db = createDb(c.env.DATABASE_URL);
+      // Initialize database connection with D1
+      const db = createDb(c.env.DB);
 
       // Build the query conditions
       const conditions = [eq(newsItems.isActive, true)];
@@ -109,7 +116,7 @@ export class NewsFetch extends OpenAPIRoute {
         limit: MAX_ITEMS,
       });
 
-      // Format the response
+      // Format the response (dates are already ISO strings in D1/SQLite)
       const formattedItems = items.map((item) => ({
         id: item.id,
         sourceId: item.sourceId,
@@ -119,9 +126,9 @@ export class NewsFetch extends OpenAPIRoute {
         author: item.author,
         preview: item.preview,
         wordCount: item.wordCount,
-        postedAt: item.postedAt?.toISOString() || null,
-        scrapedAt: item.scrapedAt.toISOString(),
-        contentFetchedAt: item.contentFetchedAt?.toISOString() || null,
+        postedAt: item.postedAt || null,
+        scrapedAt: item.scrapedAt,
+        contentFetchedAt: item.contentFetchedAt || null,
         isActive: item.isActive,
       }));
 
@@ -132,13 +139,8 @@ export class NewsFetch extends OpenAPIRoute {
         },
       };
 
-      // Cache the response
-      try {
-        await redis.set(cacheKey, response);
-      } catch (redisError) {
-        console.error("[Redis] Failed to cache response:", redisError);
-        // Continue without caching - don't fail the request
-      }
+      // Cache the response in KV
+      await kvCache.put(c.env.CACHE, cacheKey, response);
 
       return response;
     } catch (error) {

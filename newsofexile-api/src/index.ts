@@ -42,15 +42,14 @@ export default {
 		// Only run on our configured cron schedule (every minute)
 		if (controller.cron === "* * * * *") {
 			try {
-				// Initialize database connection
-				const db = createDb(env.DATABASE_URL);
+				// Initialize database connection with D1
+				const db = createDb(env.DB);
 
-				// Run the unified news scraper (pass POE cookie and Redis config)
+				// Run the unified news scraper (pass POE cookie and KV namespace)
 				const results = await runCronJobs(
 					db,
+					env.CACHE,
 					env.POE_COOKIE,
-					env.UPSTASH_REDIS_REST_URL,
-					env.UPSTASH_REDIS_REST_TOKEN,
 				);
 
 				console.log("[Scheduled] Cron job completed:", results);

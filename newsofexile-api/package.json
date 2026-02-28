@@ -8,7 +8,7 @@
 		"cron:test": "curl -X POST http://localhost:9012/__scheduled?cron=*+*+*+*+*",
 		"start": "wrangler dev --port 9012",
 		"cf-typegen": "wrangler types",
-		"db:migrate": "wrangler d1 migrations apply newsofexile-db",
+		"db:migrate": "wrangler d1 migrations apply newsofexile-db --remote",
 		"db:migrate:local": "wrangler d1 migrations apply newsofexile-db --local",
 		"db:generate": "drizzle-kit generate"
 	},

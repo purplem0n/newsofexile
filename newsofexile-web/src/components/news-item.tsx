@@ -79,9 +79,10 @@ interface PatchUpdateModalProps {
   isOpen: boolean;
   onClose: () => void;
   parentUrl: string;
+  parentTitle: string;
 }
 
-function PatchUpdateModal({ update, isOpen, onClose, parentUrl }: PatchUpdateModalProps) {
+function PatchUpdateModal({ update, isOpen, onClose, parentUrl, parentTitle }: PatchUpdateModalProps) {
   if (!isOpen || !update) return null;
 
   const formattedDate = update.isPoe1Format
@@ -110,14 +111,19 @@ function PatchUpdateModal({ update, isOpen, onClose, parentUrl }: PatchUpdateMod
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-950/50">
-          <div className="flex items-center gap-2">
-            <FileText className="h-4 w-4 text-zinc-400" />
-            <h3 className="text-sm font-medium text-zinc-100">
-              Update: {formattedDate}
-            </h3>
+        <div className="flex items-start justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-950/50">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <FileText className="h-4 w-4 text-zinc-400" />
+              <h3 className="text-sm font-medium text-zinc-100">
+                Update: {formattedDate}
+              </h3>
+            </div>
+            <span className="text-xs text-zinc-500 pl-6 line-clamp-1">
+              {parentTitle}
+            </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 pt-0.5">
             <Button
               variant="ghost"
               size="sm"
@@ -125,7 +131,7 @@ function PatchUpdateModal({ update, isOpen, onClose, parentUrl }: PatchUpdateMod
               onClick={() => window.open(parentUrl, "_blank", "noopener,noreferrer")}
             >
               <ExternalLink className="h-3 w-3 mr-1" />
-              Open Original
+              Full Patch Notes
             </Button>
             <Button
               variant="ghost"
@@ -392,6 +398,7 @@ export function NewsItemCard({
         isOpen={isModalOpen}
         onClose={handleCloseModal}
         parentUrl={item.url}
+        parentTitle={item.title}
       />
     </div>
   );

@@ -2,6 +2,7 @@ import * as cheerio from "cheerio";
 import { eq, sql, and } from "drizzle-orm";
 import { Database, kvCache } from "../db";
 import { newsItems, systemState, patchNoteUpdates } from "../db/schema";
+import { notifyTwitch, type NewsAlert } from "../twitch";
 
 // Forum sources to scrape
 const SOURCES = [
@@ -561,13 +562,14 @@ async function patchUpdateExists(
 
 /**
  * Store detected patch updates in the database
+ * Returns count and the stored updates for Twitch alerts
  */
 async function storePatchUpdates(
 	db: Database,
 	newsItemId: number,
 	updates: PatchUpdate[],
-): Promise<number> {
-	let stored = 0;
+): Promise<{ count: number; storedUpdates: Array<{ updateDate: string }> }> {
+	const storedUpdates: Array<{ updateDate: string }> = [];
 
 	for (const update of updates) {
 		const exists = await patchUpdateExists(db, newsItemId, update.updateDate);
@@ -585,13 +587,13 @@ async function storePatchUpdates(
 			updatedAt: new Date().toISOString(),
 		});
 
-		stored++;
+		storedUpdates.push({ updateDate: update.updateDate });
 		console.log(
 			`[${JOB_NAME}] Stored patch update for news item ${newsItemId}: ${update.updateDate} (${update.isPoe1Format ? 'POE1' : 'POE2'} format)`,
 		);
 	}
 
-	return stored;
+	return { count: storedUpdates.length, storedUpdates };
 }
 
 /**
@@ -601,8 +603,9 @@ async function storePatchUpdates(
 async function checkExistingPatchNotesForUpdates(
 	db: Database,
 	poeCookie?: string,
-): Promise<number> {
+): Promise<{ count: number; alerts: NewsAlert[] }> {
 	let totalUpdatesFound = 0;
+	const alerts: NewsAlert[] = [];
 
 	// Get all active Content Update patch notes from the last 30 days
 	const thirtyDaysAgo = new Date();
@@ -668,8 +671,20 @@ async function checkExistingPatchNotesForUpdates(
 				);
 
 				// Store any new updates
-				const stored = await storePatchUpdates(db, patchNote.id, updates);
-				totalUpdatesFound += stored;
+				const { count, storedUpdates } = await storePatchUpdates(
+					db,
+					patchNote.id,
+					updates,
+				);
+				totalUpdatesFound += count;
+				for (const u of storedUpdates) {
+					alerts.push({
+						title: patchNote.title,
+						url: patchNote.url,
+						sourceType: patchNote.sourceType,
+						updateDate: u.updateDate,
+					});
+				}
 			} else {
 				console.log(`[${JOB_NAME}] No updates found for ${patchNote.title}`);
 			}
@@ -684,7 +699,7 @@ async function checkExistingPatchNotesForUpdates(
 		}
 	}
 
-	return totalUpdatesFound;
+	return { count: totalUpdatesFound, alerts };
 }
 
 /**
@@ -724,6 +739,7 @@ export async function runNewsScraper(
 	db: Database,
 	kv?: KVNamespace,
 	poeCookie?: string,
+	twitchEnv?: Env,
 ): Promise<{
 	success: boolean;
 	scraped: number;
@@ -748,6 +764,8 @@ export async function runNewsScraper(
 	const sourceTypesWithNewItems = new Set<string>();
 	// Track if patch updates were found (to invalidate cache since updates are in main response)
 	let patchUpdatesFound = false;
+	// Collect alerts for Twitch notification
+	const twitchAlerts: NewsAlert[] = [];
 
 	try {
 		// Process each source
@@ -813,6 +831,19 @@ export async function runNewsScraper(
 				totalNew++;
 				console.log(`[${JOB_NAME}] Inserted: ${item.title} (${content?.wordCount || 0} words)`);
 
+				// Twitch alert for new patch items (poe1-patch, poe2-patch)
+				// Skip when we have patch updates - those get their own update-specific alerts
+				if (
+					(source.type === "poe1-patch" || source.type === "poe2-patch") &&
+					patchUpdates.length === 0
+				) {
+					twitchAlerts.push({
+						title: item.title,
+						url: item.url,
+						sourceType: source.type,
+					});
+				}
+
 				// Store any patch updates that were found for this new item
 				if (patchUpdates.length > 0) {
 					// Get the inserted item's ID
@@ -827,13 +858,25 @@ export async function runNewsScraper(
 						)
 						.limit(1);
 
-				if (insertedItem.length > 0) {
-					const stored = await storePatchUpdates(db, insertedItem[0].id, patchUpdates);
-					newPatchUpdates += stored;
-					if (stored > 0) {
-						patchUpdatesFound = true;
+					if (insertedItem.length > 0) {
+						const { count, storedUpdates } = await storePatchUpdates(
+							db,
+							insertedItem[0].id,
+							patchUpdates,
+						);
+						newPatchUpdates += count;
+						if (count > 0) {
+							patchUpdatesFound = true;
+							for (const u of storedUpdates) {
+								twitchAlerts.push({
+									title: item.title,
+									url: item.url,
+									sourceType: source.type,
+									updateDate: u.updateDate,
+								});
+							}
+						}
 					}
-				}
 				}
 
 				// Delay between content fetches to be polite
@@ -850,13 +893,24 @@ export async function runNewsScraper(
 
 		// Check existing Content Update patch notes for updates
 		console.log(`[${JOB_NAME}] Checking existing Content Update patch notes for updates`);
-		const existingUpdates = await checkExistingPatchNotesForUpdates(db, poeCookie);
-		newPatchUpdates += existingUpdates;
-		if (existingUpdates > 0) {
+		const { count: existingCount, alerts: existingAlerts } =
+			await checkExistingPatchNotesForUpdates(db, poeCookie);
+		newPatchUpdates += existingCount;
+		if (existingCount > 0) {
 			patchUpdatesFound = true;
+			twitchAlerts.push(...existingAlerts);
 		}
 
 		console.log(`[${JOB_NAME}] Completed: ${totalScraped} scraped, ${totalNew} new items, ${newPatchUpdates} patch updates`);
+
+		// Twitch notification for new news/patch items
+		if (twitchEnv && twitchAlerts.length > 0) {
+			try {
+				await notifyTwitch(db, twitchEnv, twitchAlerts);
+			} catch (err) {
+				console.error(`[${JOB_NAME}] Twitch notification failed:`, err);
+			}
+		}
 
 		// Invalidate cache if new items were added or patch updates were found
 		// (patch updates are included in main response, so we need to invalidate)

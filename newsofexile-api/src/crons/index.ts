@@ -8,11 +8,13 @@ import { runNewsScraper } from "./newsScraper";
  * 2. For each new item, immediately fetches preview + word count
  * 3. Inserts with all data in one statement
  * 4. Invalidates KV cache when new items are detected
+ * 5. Sends Twitch chat alerts for new news/patch items (when env provided)
  */
 export async function runCronJobs(
 	db: Database,
 	kv?: KVNamespace,
 	poeCookie?: string,
+	env?: Env,
 ): Promise<{
 	newsScraper: {
 		success: boolean;
@@ -23,8 +25,8 @@ export async function runCronJobs(
 }> {
 	console.log("[CronManager] Starting scheduled cron job");
 
-	// Run the unified news scraper
-	const newsScraper = await runNewsScraper(db, kv, poeCookie);
+	// Run the unified news scraper (pass Twitch env for chat alerts)
+	const newsScraper = await runNewsScraper(db, kv, poeCookie, env);
 
 	console.log("[CronManager] Completed cron job", {
 		newsScraper,

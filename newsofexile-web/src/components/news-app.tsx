@@ -39,6 +39,7 @@ export function NewsApp() {
     markAllAsRead,
     markAllPatchUpdatesAsRead,
     hasUnread,
+    hasUnreadPatchUpdates,
   } = useReadItems();
 
   // Extract all patch update IDs from items for "Mark all as read" functionality
@@ -55,11 +56,13 @@ export function NewsApp() {
     return updateIds;
   }, [items]);
 
-  // Check if there are any unread items
+  // Check if there are any unread items (main news items or patch updates)
   const hasAnyUnread = useMemo(() => {
     const ids = items.map((item) => item.id as string | number);
-    return hasUnread(ids);
-  }, [items, hasUnread]);
+    const hasUnreadMainItems = hasUnread(ids);
+    const hasUnreadPatches = hasUnreadPatchUpdates(allPatchUpdateIds);
+    return hasUnreadMainItems || hasUnreadPatches;
+  }, [items, hasUnread, hasUnreadPatchUpdates, allPatchUpdateIds]);
 
   // Handle marking all items as read (including patch updates)
   const handleMarkAllRead = useCallback(() => {

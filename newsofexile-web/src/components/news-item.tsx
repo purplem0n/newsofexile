@@ -3,8 +3,7 @@ import { Button } from "@/components/ui/button";
 import type { NewsItem, SourceType, PatchNoteUpdate } from "@/types/news";
 import { categoryLabels } from "@/types/news";
 import { ExternalLink, ChevronDown, ChevronRight, FileText, X } from "lucide-react";
-import { useCallback, useState, useEffect } from "react";
-import { fetchPatchUpdates } from "@/lib/api";
+import { useCallback, useState } from "react";
 
 interface NewsItemProps {
   item: NewsItem;
@@ -231,10 +230,9 @@ export function NewsItemCard({
   const isNew = isNewItem(item) && !isRead;
   const isContentUpdate = isContentUpdatePatch(item);
 
-  // State for patch updates (only loaded if it's a Content Update)
-  const [patchUpdates, setPatchUpdates] = useState<PatchNoteUpdate[]>([]);
+  // Use patch updates from the item (included in main API response)
+  const patchUpdates = item.patchUpdates ?? [];
   const [showUpdates, setShowUpdates] = useState(true); // Expanded by default
-  const [isLoadingUpdates, setIsLoadingUpdates] = useState(false);
 
   // State for modal
   const [selectedUpdate, setSelectedUpdate] = useState<PatchNoteUpdate | null>(null);
@@ -244,23 +242,6 @@ export function NewsItemCard({
   const hasUnreadUpdates = patchUpdates.some(
     (update) => !readPatchUpdateIds?.has(String(update.id))
   );
-
-  // Fetch patch updates when expanded
-  useEffect(() => {
-    if (showUpdates && isContentUpdate && patchUpdates.length === 0) {
-      setIsLoadingUpdates(true);
-      fetchPatchUpdates(item.id)
-        .then((response) => {
-          setPatchUpdates(response.data.updates);
-        })
-        .catch((error) => {
-          console.error("Failed to fetch patch updates:", error);
-        })
-        .finally(() => {
-          setIsLoadingUpdates(false);
-        });
-    }
-  }, [showUpdates, isContentUpdate, item.id, patchUpdates.length]);
 
   const handleClick = useCallback(() => {
     if (onItemClick && isNew) {
@@ -337,8 +318,8 @@ export function NewsItemCard({
         </div>
       </a>
 
-      {/* Patch Updates Section - INSIDE the card, below the main content, expanded by default */}
-      {isContentUpdate && (
+      {/* Patch Updates Section - Only shown when there are updates */}
+      {isContentUpdate && patchUpdates.length > 0 && (
         <div className="px-3 pb-3 pt-1 border-t border-zinc-800/50">
           <button
             onClick={(e) => {
@@ -354,9 +335,7 @@ export function NewsItemCard({
               <ChevronRight className="h-3.5 w-3.5" />
             )}
             <span>
-              {patchUpdates.length > 0
-                ? `${patchUpdates.length} update${patchUpdates.length > 1 ? "s" : ""}`
-                : "Check for updates"}
+              {patchUpdates.length} update{patchUpdates.length > 1 ? "s" : ""}
             </span>
             {/* Show NEW indicator for unread updates - RED color */}
             {hasUnreadUpdates && (
@@ -372,25 +351,15 @@ export function NewsItemCard({
           {/* Collapsible updates section - expanded by default */}
           {showUpdates && (
             <div className="mt-2 space-y-1.5">
-              {isLoadingUpdates ? (
-                <div className="text-xs text-zinc-500 py-1 px-2">
-                  Loading updates...
-                </div>
-              ) : patchUpdates.length > 0 ? (
-                patchUpdates.map((update) => (
-                  <PatchUpdateItem
-                    key={update.id}
-                    update={update}
-                    isRead={readPatchUpdateIds?.has(String(update.id))}
-                    onClick={onPatchUpdateClick}
-                    onOpenModal={handleOpenModal}
-                  />
-                ))
-              ) : (
-                <div className="text-xs text-zinc-500 py-1 px-2">
-                  No updates found yet
-                </div>
-              )}
+              {patchUpdates.map((update) => (
+                <PatchUpdateItem
+                  key={update.id}
+                  update={update}
+                  isRead={readPatchUpdateIds?.has(String(update.id))}
+                  onClick={onPatchUpdateClick}
+                  onOpenModal={handleOpenModal}
+                />
+              ))}
             </div>
           )}
         </div>

@@ -2,7 +2,7 @@ import { Num, OpenAPIRoute, Str } from "chanfana";
 import { eq, and, desc } from "drizzle-orm";
 import { z } from "zod";
 import { createDb, kvCache } from "../db";
-import { newsItems } from "../db/schema";
+import { newsItems, patchNoteUpdates } from "../db/schema";
 import { type AppContext, SourceType } from "../types";
 
 const MAX_ITEMS = 300;
@@ -22,7 +22,7 @@ export class NewsFetch extends OpenAPIRoute {
   schema = {
     tags: ["News"],
     summary: "List News Items",
-    description: `Fetch up to ${MAX_ITEMS} recent news items. Optionally filter by source type.`,
+    description: `Fetch up to ${MAX_ITEMS} recent news items. Optionally filter by source type. Includes patch note updates as sub-items for Content Update patches.`,
     request: {
       query: z.object({
         sourceType: SourceType.optional().describe(
@@ -32,7 +32,7 @@ export class NewsFetch extends OpenAPIRoute {
     },
     responses: {
       "200": {
-        description: "Returns a list of news items",
+        description: "Returns a list of news items with patch updates",
         content: {
           "application/json": {
             schema: z.object({
@@ -52,6 +52,16 @@ export class NewsFetch extends OpenAPIRoute {
                     scrapedAt: z.string(),
                     contentFetchedAt: z.string().nullable(),
                     isActive: z.boolean(),
+                    patchUpdates: z.array(
+                      z.object({
+                        id: z.number(),
+                        updateDate: z.string(),
+                        contentHtml: z.string(),
+                        contentText: z.string(),
+                        isPoe1Format: z.boolean(),
+                        scrapedAt: z.string(),
+                      })
+                    ).optional(),
                   }),
                 ),
               }),
@@ -90,6 +100,14 @@ export class NewsFetch extends OpenAPIRoute {
             scrapedAt: string;
             contentFetchedAt: string | null;
             isActive: boolean;
+            patchUpdates?: Array<{
+              id: number;
+              updateDate: string;
+              contentHtml: string;
+              contentText: string;
+              isPoe1Format: boolean;
+              scrapedAt: string;
+            }>;
           }>;
         };
       }>(c.env.CACHE, cacheKey);
@@ -109,11 +127,16 @@ export class NewsFetch extends OpenAPIRoute {
         conditions.push(eq(newsItems.sourceType, sourceType));
       }
 
-      // Fetch up to MAX_ITEMS items
+      // Fetch up to MAX_ITEMS items with their patch updates
       const items = await db.query.newsItems.findMany({
         where: and(...conditions),
         orderBy: [desc(newsItems.postedAt), desc(newsItems.id)],
         limit: MAX_ITEMS,
+        with: {
+          patchUpdates: {
+            orderBy: [desc(patchNoteUpdates.updateDate)],
+          },
+        },
       });
 
       // Format the response (dates are already ISO strings in D1/SQLite)
@@ -130,6 +153,17 @@ export class NewsFetch extends OpenAPIRoute {
         scrapedAt: item.scrapedAt,
         contentFetchedAt: item.contentFetchedAt || null,
         isActive: item.isActive,
+        // Include patch updates if they exist (only for Content Update patches)
+        patchUpdates: item.patchUpdates?.length > 0
+          ? item.patchUpdates.map((update) => ({
+              id: update.id,
+              updateDate: update.updateDate,
+              contentHtml: update.contentHtml,
+              contentText: update.contentText,
+              isPoe1Format: update.isPoe1Format,
+              scrapedAt: update.scrapedAt,
+            }))
+          : undefined,
       }));
 
       const response = {

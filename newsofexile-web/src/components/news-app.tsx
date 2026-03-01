@@ -1,11 +1,10 @@
-import { useMemo, useCallback, useState, useEffect } from "react";
+import { useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { NewsFilter } from "@/components/news-filter";
 import { NewsList, NewsListSkeleton } from "@/components/news-list";
 import { useNews } from "@/hooks/use-news";
 import { useReadItems } from "@/hooks/use-read-items";
-import type { NewsCategory, SourceType, PatchNoteUpdate } from "@/types/news";
-import { fetchPatchUpdates } from "@/lib/api";
+import type { NewsCategory, SourceType } from "@/types/news";
 
 const validFilters: NewsCategory[] = [
   "all",
@@ -42,37 +41,18 @@ export function NewsApp() {
     hasUnread,
   } = useReadItems();
 
-  // Store all loaded patch updates to mark them as read on "Mark all as read"
-  const [allPatchUpdateIds, setAllPatchUpdateIds] = useState<number[]>([]);
-
-  // Load patch updates for Content Update items
-  useEffect(() => {
-    const loadPatchUpdates = async () => {
-      const contentUpdateItems = items.filter(
-        (item) =>
-          item.sourceType.includes("patch") &&
-          item.title.toLowerCase().includes("content update")
-      );
-
-      const updateIds: number[] = [];
-
-      for (const item of contentUpdateItems) {
-        try {
-          const response = await fetchPatchUpdates(item.id);
-          response.data.updates.forEach((update: PatchNoteUpdate) => {
-            updateIds.push(update.id);
-          });
-        } catch (error) {
-          // Ignore errors - item might not have updates yet
+  // Extract all patch update IDs from items for "Mark all as read" functionality
+  // Patch updates are now included in the main API response
+  const allPatchUpdateIds = useMemo(() => {
+    const updateIds: number[] = [];
+    for (const item of items) {
+      if (item.patchUpdates && item.patchUpdates.length > 0) {
+        for (const update of item.patchUpdates) {
+          updateIds.push(update.id);
         }
       }
-
-      setAllPatchUpdateIds(updateIds);
-    };
-
-    if (items.length > 0) {
-      loadPatchUpdates();
     }
+    return updateIds;
   }, [items]);
 
   // Check if there are any unread items

@@ -8,6 +8,17 @@ export type SourceType =
 // Filter type includes "all" for UI filtering
 export type NewsCategory = SourceType | "all";
 
+// Patch note update matching API response structure
+export interface PatchNoteUpdate {
+  id: number;
+  newsItemId?: number;
+  updateDate: string; // Date string like "2026-03-01" or "8-12-2025"
+  contentHtml: string;
+  contentText: string;
+  isPoe1Format: boolean;
+  scrapedAt: string;
+}
+
 // News item matching API response structure
 export interface NewsItem {
   id: number;
@@ -22,6 +33,8 @@ export interface NewsItem {
   scrapedAt: string; // ISO date string
   contentFetchedAt: string | null;
   isActive: boolean;
+  // Patch updates are included for Content Update patch notes
+  patchUpdates?: PatchNoteUpdate[];
 }
 
 // API response structure
@@ -29,25 +42,6 @@ export interface NewsApiResponse {
   success: boolean;
   data: {
     items: NewsItem[];
-  };
-}
-
-// Patch note update matching API response structure
-export interface PatchNoteUpdate {
-  id: number;
-  newsItemId: number;
-  updateDate: string; // Date string like "2026-03-01" or "8-12-2025"
-  contentHtml: string;
-  contentText: string;
-  isPoe1Format: boolean;
-  scrapedAt: string;
-}
-
-// API response for patch updates
-export interface PatchUpdatesApiResponse {
-  success: boolean;
-  data: {
-    updates: PatchNoteUpdate[];
   };
 }
 

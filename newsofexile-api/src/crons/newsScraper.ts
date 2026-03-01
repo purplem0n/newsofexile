@@ -690,12 +690,12 @@ async function checkExistingPatchNotesForUpdates(
 /**
  * Invalidate news list cache for specific source types
  * Always invalidates the "all" cache, plus caches for source types that had new items
- * Also invalidates patch update caches if new patch updates were found
+ * Also invalidates when patch updates are found (since they're included in the main response)
  */
 async function invalidateNewsCache(
 	kv: KVNamespace,
 	sourceTypesWithNewItems: Set<string>,
-	patchUpdatesFound = false,
+	patchUpdatesFound: boolean = false,
 ): Promise<void> {
 	const keysToDelete: string[] = [];
 
@@ -707,20 +707,12 @@ async function invalidateNewsCache(
 		keysToDelete.push(`news:list:source:${sourceType}`);
 	}
 
-	// Invalidate patch update caches if new updates were found
-	if (patchUpdatesFound) {
-		keysToDelete.push("patch-updates:list");
-		keysToDelete.push("patch-updates:recent");
-		// Also invalidate per-news-item patch update caches
-		keysToDelete.push("patch-updates:by-news-item:*");
-	}
-
 	// Delete all collected keys using KV
 	await kvCache.deleteMany(kv, keysToDelete);
 
 	console.log(`[${JOB_NAME}] Cache invalidated: ${keysToDelete.length} keys deleted`, {
 		sourceTypes: Array.from(sourceTypesWithNewItems),
-		patchUpdatesInvalidated: patchUpdatesFound,
+		patchUpdatesFound,
 	});
 }
 
@@ -754,7 +746,7 @@ export async function runNewsScraper(
 
 	// Track which source types had new items (for targeted cache invalidation)
 	const sourceTypesWithNewItems = new Set<string>();
-	// Track if patch updates were found (to invalidate patch update caches)
+	// Track if patch updates were found (to invalidate cache since updates are in main response)
 	let patchUpdatesFound = false;
 
 	try {
@@ -867,6 +859,7 @@ export async function runNewsScraper(
 		console.log(`[${JOB_NAME}] Completed: ${totalScraped} scraped, ${totalNew} new items, ${newPatchUpdates} patch updates`);
 
 		// Invalidate cache if new items were added or patch updates were found
+		// (patch updates are included in main response, so we need to invalidate)
 		if (kv && (totalNew > 0 || patchUpdatesFound)) {
 			await invalidateNewsCache(kv, sourceTypesWithNewItems, patchUpdatesFound);
 		}

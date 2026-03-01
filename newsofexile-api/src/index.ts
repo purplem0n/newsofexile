@@ -2,7 +2,6 @@ import { fromHono } from "chanfana";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { NewsFetch } from "./endpoints/newsFetch";
-import { PatchUpdatesFetch } from "./endpoints/patchUpdatesFetch";
 import { createDb } from "./db";
 import { runCronJobs } from "./crons";
 
@@ -26,7 +25,6 @@ const openapi = fromHono(app, {
 
 // Register OpenAPI endpoints
 openapi.get("/api/news", NewsFetch);
-openapi.get("/api/news/:newsItemId/updates", PatchUpdatesFetch);
 
 // You may also register routes for non OpenAPI directly on Hono
 // app.get('/test', (c) => c.text('Hono!'))

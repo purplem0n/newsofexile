@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { relations } from "drizzle-orm";
 
 /**
  * Helper to convert Date to ISO string for storage
@@ -118,6 +119,20 @@ export const patchNoteUpdates = sqliteTable(
     index("patch_update_date_idx").on(table.updateDate),
   ]
 );
+
+/**
+ * Define relations between tables
+ */
+export const newsItemsRelations = relations(newsItems, ({ many }) => ({
+  patchUpdates: many(patchNoteUpdates),
+}));
+
+export const patchNoteUpdatesRelations = relations(patchNoteUpdates, ({ one }) => ({
+  newsItem: one(newsItems, {
+    fields: [patchNoteUpdates.newsItemId],
+    references: [newsItems.id],
+  }),
+}));
 
 // Type exports for TypeScript
 export type NewsItem = typeof newsItems.$inferSelect;

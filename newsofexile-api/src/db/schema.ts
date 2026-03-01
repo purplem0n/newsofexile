@@ -80,8 +80,49 @@ export const systemState = sqliteTable("system_state", {
     .$default(() => new Date().toISOString()),
 });
 
+/**
+ * Patch note updates detected from Content Update patch notes
+ * Tracks when GGG adds updates to existing patch notes
+ */
+export const patchNoteUpdates = sqliteTable(
+  "patch_note_updates",
+  {
+    id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
+    // Foreign key to the parent news item (Content Update patch note)
+    newsItemId: integer("news_item_id", { mode: "number" })
+      .notNull()
+      .references(() => newsItems.id, { onDelete: "cascade" }),
+    // The date string found in the update header (e.g., "2026-03-01" or "8-12-2025")
+    updateDate: text("update_date").notNull(),
+    // The raw HTML content of the update (inside the spoiler)
+    contentHtml: text("content_html").notNull(),
+    // Text content extracted from the HTML for searching/display
+    contentText: text("content_text").notNull(),
+    // Whether this is a POE1-style update (true) or POE2-style (false)
+    isPoe1Format: integer("is_poe1_format", { mode: "boolean" }).notNull().default(true),
+    // When this update was first detected/scraped - stored as ISO string
+    scrapedAt: text("scraped_at")
+      .notNull()
+      .$default(() => new Date().toISOString()),
+    // When this record was last updated - stored as ISO string
+    updatedAt: text("updated_at")
+      .notNull()
+      .$default(() => new Date().toISOString()),
+  },
+  (table) => [
+    // Ensure unique combination of news item and update date
+    uniqueIndex("patch_update_unique_idx").on(table.newsItemId, table.updateDate),
+    // Index for finding updates by news item
+    index("patch_update_news_item_idx").on(table.newsItemId),
+    // Index for sorting by date
+    index("patch_update_date_idx").on(table.updateDate),
+  ]
+);
+
 // Type exports for TypeScript
 export type NewsItem = typeof newsItems.$inferSelect;
 export type NewNewsItem = typeof newsItems.$inferInsert;
 export type SystemState = typeof systemState.$inferSelect;
 export type NewSystemState = typeof systemState.$inferInsert;
+export type PatchNoteUpdate = typeof patchNoteUpdates.$inferSelect;
+export type NewPatchNoteUpdate = typeof patchNoteUpdates.$inferInsert;

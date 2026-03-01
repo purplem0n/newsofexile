@@ -10,7 +10,9 @@ interface NewsListProps {
   error: string | null;
   onRetry: () => void;
   readIds?: Set<string>;
+  readPatchUpdateIds?: Set<string>;
   onItemClick?: (id: string) => void;
+  onPatchUpdateClick?: (id: number) => void;
 }
 
 export function NewsList({
@@ -19,7 +21,9 @@ export function NewsList({
   error,
   onRetry,
   readIds,
+  readPatchUpdateIds,
   onItemClick,
+  onPatchUpdateClick,
 }: NewsListProps) {
   if (error && items.length === 0) {
     return (
@@ -53,7 +57,9 @@ export function NewsList({
           key={item.id}
           item={item}
           isRead={readIds?.has(String(item.id))}
+          readPatchUpdateIds={readPatchUpdateIds}
           onItemClick={onItemClick}
+          onPatchUpdateClick={onPatchUpdateClick}
         />
       ))}
 

@@ -32,6 +32,25 @@ export interface NewsApiResponse {
   };
 }
 
+// Patch note update matching API response structure
+export interface PatchNoteUpdate {
+  id: number;
+  newsItemId: number;
+  updateDate: string; // Date string like "2026-03-01" or "8-12-2025"
+  contentHtml: string;
+  contentText: string;
+  isPoe1Format: boolean;
+  scrapedAt: string;
+}
+
+// API response for patch updates
+export interface PatchUpdatesApiResponse {
+  success: boolean;
+  data: {
+    updates: PatchNoteUpdate[];
+  };
+}
+
 export const categoryLabels: Record<NewsCategory, string> = {
   all: "All",
   "poe1-news": "PoE 1 News",

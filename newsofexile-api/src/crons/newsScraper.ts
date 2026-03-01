@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and } from "drizzle-orm";
 import { Database, kvCache } from "../db";
-import { newsItems, systemState } from "../db/schema";
+import { newsItems, systemState, patchNoteUpdates } from "../db/schema";
 
 // Forum sources to scrape
 const SOURCES = [
@@ -413,12 +413,289 @@ async function scrapeIndexPage(
 }
 
 /**
+ * Represents a detected patch note update
+ */
+interface PatchUpdate {
+	updateDate: string;
+	contentHtml: string;
+	contentText: string;
+	isPoe1Format: boolean;
+}
+
+/**
+ * Extract patch note updates from HTML content
+ * Handles both POE1 and POE2 formats
+ *
+ * POE1 Format:
+ *   <span style="text-decoration:underline"><strong>Updates for YYYY-MM-DD</strong></span>
+ *   <div class="spoiler spoilerHidden">...</div>
+ *
+ * POE2 Format:
+ *   <h3>Updates to Patch Notes</h3>
+ *   <div class="spoiler spoilerHidden">
+ *     <div class="spoilerTitle"><span>Updates for M-D-YYYY</span></div>
+ *     <div class="spoilerContent">...</div>
+ *   </div>
+ */
+export function extractPatchUpdates(html: string): PatchUpdate[] {
+	const $ = cheerio.load(html);
+	const updates: PatchUpdate[] = [];
+
+	// Try POE1 format first: <span><strong>Updates for YYYY-MM-DD</strong></span>
+	// followed by a spoiler div
+	const poe1UpdateHeaders = $('span strong').filter((_, el) => {
+		const text = $(el).text().trim();
+		return /^Updates for\s+\d{4}-\d{2}-\d{2}$/i.test(text);
+	});
+
+	poe1UpdateHeaders.each((_, header) => {
+		const headerText = $(header).text().trim();
+		const dateMatch = headerText.match(/Updates for\s+(\d{4}-\d{2}-\d{2})/i);
+		if (!dateMatch) return;
+
+		const updateDate = dateMatch[1];
+
+		// Find the next sibling spoiler div
+		const spoilerDiv = $(header).closest('span').next('.spoiler, .spoilerHidden');
+		if (!spoilerDiv.length) return;
+
+		const spoilerContent = spoilerDiv.find('.spoilerContent');
+		const contentHtml = spoilerContent.html() || spoilerDiv.html() || '';
+		const contentText = spoilerContent.text() || spoilerDiv.text() || '';
+
+		// Clean up the text
+		const cleanText = contentText
+			.replace(/\r\n/g, '\n')
+			.replace(/\n{3,}/g, '\n\n')
+			.trim();
+
+		if (cleanText) {
+			updates.push({
+				updateDate,
+				contentHtml: contentHtml.trim(),
+				contentText: cleanText,
+				isPoe1Format: true,
+			});
+		}
+	});
+
+	// If no POE1 format found, try POE2 format
+	if (updates.length === 0) {
+		// Look for "Updates to Patch Notes" heading
+		const poe2Header = $('h3').filter((_, el) => {
+			return /Updates to Patch Notes/i.test($(el).text().trim());
+		});
+
+		if (poe2Header.length) {
+			// Find all spoiler divs that follow this header
+			// Each spoiler contains one update date
+			const container = poe2Header.parent();
+			const spoilers = container.find('.spoiler, .spoilerHidden');
+
+			spoilers.each((_, spoiler) => {
+				const spoilerTitle = $(spoiler).find('.spoilerTitle span').text().trim();
+				const dateMatch = spoilerTitle.match(/Updates for\s+(\d{1,2}-\d{1,2}-\d{4})/i);
+				if (!dateMatch) return;
+
+				const updateDate = dateMatch[1];
+				const spoilerContent = $(spoiler).find('.spoilerContent');
+				const contentHtml = spoilerContent.html() || $(spoiler).html() || '';
+				const contentText = spoilerContent.text() || $(spoiler).text() || '';
+
+				// Clean up the text
+				const cleanText = contentText
+					.replace(/\r\n/g, '\n')
+					.replace(/\n{3,}/g, '\n\n')
+					.trim();
+
+				if (cleanText && cleanText !== 'Show') {
+					updates.push({
+						updateDate,
+						contentHtml: contentHtml.trim(),
+						contentText: cleanText,
+						isPoe1Format: false,
+					});
+				}
+			});
+		}
+	}
+
+	return updates;
+}
+
+/**
+ * Check if a news item is a "Content Update" patch note
+ * These are the ones that receive updates from GGG
+ */
+function isContentUpdatePatch(title: string, sourceType: string): boolean {
+	// Only check patch notes
+	if (!sourceType.includes('patch')) {
+		return false;
+	}
+
+	// Check if title contains "Content Update"
+	return title.toLowerCase().includes('content update');
+}
+
+/**
+ * Check if a patch note update already exists in the database
+ */
+async function patchUpdateExists(
+	db: Database,
+	newsItemId: number,
+	updateDate: string,
+): Promise<boolean> {
+	const existing = await db
+		.select({ id: patchNoteUpdates.id })
+		.from(patchNoteUpdates)
+		.where(
+			and(
+				eq(patchNoteUpdates.newsItemId, newsItemId),
+				eq(patchNoteUpdates.updateDate, updateDate),
+			),
+		)
+		.limit(1);
+
+	return existing.length > 0;
+}
+
+/**
+ * Store detected patch updates in the database
+ */
+async function storePatchUpdates(
+	db: Database,
+	newsItemId: number,
+	updates: PatchUpdate[],
+): Promise<number> {
+	let stored = 0;
+
+	for (const update of updates) {
+		const exists = await patchUpdateExists(db, newsItemId, update.updateDate);
+		if (exists) {
+			continue;
+		}
+
+		await db.insert(patchNoteUpdates).values({
+			newsItemId,
+			updateDate: update.updateDate,
+			contentHtml: update.contentHtml,
+			contentText: update.contentText,
+			isPoe1Format: update.isPoe1Format,
+			scrapedAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		});
+
+		stored++;
+		console.log(
+			`[${JOB_NAME}] Stored patch update for news item ${newsItemId}: ${update.updateDate} (${update.isPoe1Format ? 'POE1' : 'POE2'} format)`,
+		);
+	}
+
+	return stored;
+}
+
+/**
+ * Fetch and check for updates on existing Content Update patch notes
+ * This runs after scraping new items to detect any updates GGG may have added
+ */
+async function checkExistingPatchNotesForUpdates(
+	db: Database,
+	poeCookie?: string,
+): Promise<number> {
+	let totalUpdatesFound = 0;
+
+	// Get all active Content Update patch notes from the last 30 days
+	const thirtyDaysAgo = new Date();
+	thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+	const existingPatchNotes = await db
+		.select({
+			id: newsItems.id,
+			title: newsItems.title,
+			url: newsItems.url,
+			sourceType: newsItems.sourceType,
+		})
+		.from(newsItems)
+		.where(
+			and(
+				sql`${newsItems.sourceType} LIKE '%patch%'`,
+				eq(newsItems.isActive, true),
+				sql`${newsItems.postedAt} > ${thirtyDaysAgo.toISOString()}`,
+			),
+		)
+		.limit(20);
+
+	// Filter to only Content Update patches
+	const contentUpdates = existingPatchNotes.filter((item) =>
+		isContentUpdatePatch(item.title, item.sourceType),
+	);
+
+	console.log(
+		`[${JOB_NAME}] Checking ${contentUpdates.length} Content Update patch notes for updates`,
+	);
+
+	for (const patchNote of contentUpdates) {
+		try {
+			console.log(`[${JOB_NAME}] Checking updates for: ${patchNote.title}`);
+
+			// Fetch the full HTML content
+			const headers: Record<string, string> = {
+				"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+				Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+				"Accept-Language": "en-US,en;q=0.9",
+			};
+
+			if (poeCookie) {
+				headers["Cookie"] = poeCookie;
+			}
+
+			const response = await fetch(patchNote.url, { headers });
+			if (!response.ok) {
+				console.error(
+					`[${JOB_NAME}] Failed to fetch ${patchNote.url}: HTTP ${response.status}`,
+				);
+				continue;
+			}
+
+			const html = await response.text();
+
+			// Extract patch updates from the HTML
+			const updates = extractPatchUpdates(html);
+
+			if (updates.length > 0) {
+				console.log(
+					`[${JOB_NAME}] Found ${updates.length} update(s) for ${patchNote.title}`,
+				);
+
+				// Store any new updates
+				const stored = await storePatchUpdates(db, patchNote.id, updates);
+				totalUpdatesFound += stored;
+			} else {
+				console.log(`[${JOB_NAME}] No updates found for ${patchNote.title}`);
+			}
+
+			// Delay between checks to be polite
+			await new Promise((resolve) => setTimeout(resolve, REQUEST_DELAY_MS));
+		} catch (error) {
+			console.error(
+				`[${JOB_NAME}] Error checking updates for ${patchNote.title}:`,
+				error,
+			);
+		}
+	}
+
+	return totalUpdatesFound;
+}
+
+/**
  * Invalidate news list cache for specific source types
  * Always invalidates the "all" cache, plus caches for source types that had new items
+ * Also invalidates patch update caches if new patch updates were found
  */
 async function invalidateNewsCache(
 	kv: KVNamespace,
 	sourceTypesWithNewItems: Set<string>,
+	patchUpdatesFound = false,
 ): Promise<void> {
 	const keysToDelete: string[] = [];
 
@@ -430,16 +707,26 @@ async function invalidateNewsCache(
 		keysToDelete.push(`news:list:source:${sourceType}`);
 	}
 
+	// Invalidate patch update caches if new updates were found
+	if (patchUpdatesFound) {
+		keysToDelete.push("patch-updates:list");
+		keysToDelete.push("patch-updates:recent");
+		// Also invalidate per-news-item patch update caches
+		keysToDelete.push("patch-updates:by-news-item:*");
+	}
+
 	// Delete all collected keys using KV
 	await kvCache.deleteMany(kv, keysToDelete);
 
 	console.log(`[${JOB_NAME}] Cache invalidated: ${keysToDelete.length} keys deleted`, {
 		sourceTypes: Array.from(sourceTypesWithNewItems),
+		patchUpdatesInvalidated: patchUpdatesFound,
 	});
 }
 
 /**
  * Main job: Scrape index, check for new items, fetch content, insert with preview
+ * Also checks existing Content Update patch notes for updates from GGG
  */
 export async function runNewsScraper(
 	db: Database,
@@ -449,6 +736,7 @@ export async function runNewsScraper(
 	success: boolean;
 	scraped: number;
 	newItems: number;
+	newPatchUpdates: number;
 	error?: string;
 }> {
 	console.log(`[${JOB_NAME}] Starting news scraper job`);
@@ -456,15 +744,18 @@ export async function runNewsScraper(
 	const hasLock = await acquireLock(db);
 	if (!hasLock) {
 		console.log(`[${JOB_NAME}] Job already running, skipping`);
-		return { success: true, scraped: 0, newItems: 0 };
+		return { success: true, scraped: 0, newItems: 0, newPatchUpdates: 0 };
 	}
 
 	let totalScraped = 0;
 	let totalNew = 0;
+	let newPatchUpdates = 0;
 	let jobError: Error | null = null;
 
 	// Track which source types had new items (for targeted cache invalidation)
 	const sourceTypesWithNewItems = new Set<string>();
+	// Track if patch updates were found (to invalidate patch update caches)
+	let patchUpdatesFound = false;
 
 	try {
 		// Process each source
@@ -492,6 +783,26 @@ export async function runNewsScraper(
 				console.log(`[${JOB_NAME}] Fetching content from ${item.url}`);
 				const content = await fetchContent(item.url, poeCookie);
 
+				// Check if this is a Content Update patch note and extract any updates
+				let patchUpdates: PatchUpdate[] = [];
+				if (isContentUpdatePatch(item.title, source.type)) {
+					console.log(`[${JOB_NAME}] Detected Content Update patch note, checking for updates`);
+					// Fetch the full HTML to check for updates
+					const headers: Record<string, string> = {
+						"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+						Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+						"Accept-Language": "en-US,en;q=0.9",
+					};
+					if (poeCookie) {
+						headers["Cookie"] = poeCookie;
+					}
+					const response = await fetch(item.url, { headers });
+					if (response.ok) {
+						const html = await response.text();
+						patchUpdates = extractPatchUpdates(html);
+					}
+				}
+
 				// Insert with all data including preview and word count
 				await db.insert(newsItems).values({
 					sourceId: item.sourceId,
@@ -510,6 +821,29 @@ export async function runNewsScraper(
 				totalNew++;
 				console.log(`[${JOB_NAME}] Inserted: ${item.title} (${content?.wordCount || 0} words)`);
 
+				// Store any patch updates that were found for this new item
+				if (patchUpdates.length > 0) {
+					// Get the inserted item's ID
+					const insertedItem = await db
+						.select({ id: newsItems.id })
+						.from(newsItems)
+						.where(
+							and(
+								eq(newsItems.sourceId, item.sourceId),
+								eq(newsItems.sourceType, source.type),
+							),
+						)
+						.limit(1);
+
+				if (insertedItem.length > 0) {
+					const stored = await storePatchUpdates(db, insertedItem[0].id, patchUpdates);
+					newPatchUpdates += stored;
+					if (stored > 0) {
+						patchUpdatesFound = true;
+					}
+				}
+				}
+
 				// Delay between content fetches to be polite
 				if (i < items.length - 1) {
 					await new Promise((resolve) => setTimeout(resolve, REQUEST_DELAY_MS));
@@ -522,11 +856,19 @@ export async function runNewsScraper(
 			}
 		}
 
-		console.log(`[${JOB_NAME}] Completed: ${totalScraped} scraped, ${totalNew} new items inserted`);
+		// Check existing Content Update patch notes for updates
+		console.log(`[${JOB_NAME}] Checking existing Content Update patch notes for updates`);
+		const existingUpdates = await checkExistingPatchNotesForUpdates(db, poeCookie);
+		newPatchUpdates += existingUpdates;
+		if (existingUpdates > 0) {
+			patchUpdatesFound = true;
+		}
 
-		// Invalidate cache if new items were added
-		if (totalNew > 0 && kv) {
-			await invalidateNewsCache(kv, sourceTypesWithNewItems);
+		console.log(`[${JOB_NAME}] Completed: ${totalScraped} scraped, ${totalNew} new items, ${newPatchUpdates} patch updates`);
+
+		// Invalidate cache if new items were added or patch updates were found
+		if (kv && (totalNew > 0 || patchUpdatesFound)) {
+			await invalidateNewsCache(kv, sourceTypesWithNewItems, patchUpdatesFound);
 		}
 	} catch (error) {
 		jobError = error instanceof Error ? error : new Error(String(error));
@@ -539,6 +881,7 @@ export async function runNewsScraper(
 		success: jobError === null,
 		scraped: totalScraped,
 		newItems: totalNew,
+		newPatchUpdates,
 		error: jobError?.message,
 	};
 }

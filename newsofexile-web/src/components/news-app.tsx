@@ -1,10 +1,11 @@
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { NewsFilter } from "@/components/news-filter";
 import { NewsList, NewsListSkeleton } from "@/components/news-list";
 import { useNews } from "@/hooks/use-news";
 import { useReadItems } from "@/hooks/use-read-items";
-import type { NewsCategory, SourceType } from "@/types/news";
+import type { NewsCategory, SourceType, PatchNoteUpdate } from "@/types/news";
+import { fetchPatchUpdates } from "@/lib/api";
 
 const validFilters: NewsCategory[] = [
   "all",
@@ -31,7 +32,48 @@ export function NewsApp() {
 
   const { items, loading, error, refresh } = useNews(sourceType);
 
-  const { readIds, markAsRead, markAllAsRead, hasUnread } = useReadItems();
+  const {
+    readIds,
+    readPatchUpdateIds,
+    markAsRead,
+    markPatchUpdateAsRead,
+    markAllAsRead,
+    markAllPatchUpdatesAsRead,
+    hasUnread,
+  } = useReadItems();
+
+  // Store all loaded patch updates to mark them as read on "Mark all as read"
+  const [allPatchUpdateIds, setAllPatchUpdateIds] = useState<number[]>([]);
+
+  // Load patch updates for Content Update items
+  useEffect(() => {
+    const loadPatchUpdates = async () => {
+      const contentUpdateItems = items.filter(
+        (item) =>
+          item.sourceType.includes("patch") &&
+          item.title.toLowerCase().includes("content update")
+      );
+
+      const updateIds: number[] = [];
+
+      for (const item of contentUpdateItems) {
+        try {
+          const response = await fetchPatchUpdates(item.id);
+          response.data.updates.forEach((update: PatchNoteUpdate) => {
+            updateIds.push(update.id);
+          });
+        } catch (error) {
+          // Ignore errors - item might not have updates yet
+        }
+      }
+
+      setAllPatchUpdateIds(updateIds);
+    };
+
+    if (items.length > 0) {
+      loadPatchUpdates();
+    }
+  }, [items]);
 
   // Check if there are any unread items
   const hasAnyUnread = useMemo(() => {
@@ -39,11 +81,13 @@ export function NewsApp() {
     return hasUnread(ids);
   }, [items, hasUnread]);
 
-  // Handle marking all items as read
+  // Handle marking all items as read (including patch updates)
   const handleMarkAllRead = useCallback(() => {
     const ids = items.map((item) => item.id as string | number);
     markAllAsRead(ids);
-  }, [items, markAllAsRead]);
+    // Also mark all patch updates as read
+    markAllPatchUpdatesAsRead(allPatchUpdateIds);
+  }, [items, markAllAsRead, markAllPatchUpdatesAsRead, allPatchUpdateIds]);
 
   // Handle filter change - update URL
   const handleFilterChange = useCallback((newFilter: NewsCategory) => {
@@ -73,7 +117,9 @@ export function NewsApp() {
             error={error}
             onRetry={refresh}
             readIds={readIds}
+            readPatchUpdateIds={readPatchUpdateIds}
             onItemClick={markAsRead}
+            onPatchUpdateClick={markPatchUpdateAsRead}
           />
         )}
 

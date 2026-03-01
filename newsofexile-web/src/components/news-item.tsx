@@ -88,9 +88,27 @@ function PatchUpdateModal({ update, isOpen, onClose, parentUrl }: PatchUpdateMod
     ? update.updateDate
     : update.updateDate;
 
+  // Handle click on backdrop to close modal
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) {
+      onClose();
+    }
+  };
+
+  // Prevent wheel events from propagating to the main page when modal is open
+  const handleWheel = (e: React.WheelEvent) => {
+    e.stopPropagation();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="relative w-full max-w-2xl max-h-[80vh] rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl overflow-hidden flex flex-col">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={handleBackdropClick}
+    >
+      <div
+        className="relative w-full max-w-2xl max-h-[80vh] rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-950/50">
           <div className="flex items-center gap-2">
@@ -121,7 +139,10 @@ function PatchUpdateModal({ update, isOpen, onClose, parentUrl }: PatchUpdateMod
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-auto p-4">
+        <div
+          className="flex-1 overflow-auto p-4 overscroll-contain"
+          onWheel={handleWheel}
+        >
           <div
             className="text-sm text-zinc-300 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-2 [&_ul]:space-y-1
               [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-2 [&_ol]:space-y-1

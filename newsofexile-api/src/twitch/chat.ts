@@ -1,17 +1,29 @@
+import type { Database } from "../db";
+import { forceRefreshAccessToken } from "./auth";
+
 const RATE_LIMIT_INTERVAL_MS = 1500; // 20 msg / 30 sec = 1 per 1500ms
 const RATE_LIMIT_MARGIN_MS = 15;
 
+export interface SendChatMessageOptions {
+	broadcasterId: string;
+	message: string;
+	accessToken: string;
+	clientId: string;
+	senderId: string;
+	db: Database;
+	env: Env;
+	allowRetry?: boolean; // Set to false on retry to prevent infinite loops
+}
+
 /**
  * Send a chat message to a Twitch channel.
+ * If a 401 Unauthorized error occurs, attempts to refresh the token and retry once.
  * Returns the latency in ms for rate limit calculation.
  */
 export async function sendChatMessage(
-	broadcasterId: string,
-	message: string,
-	accessToken: string,
-	clientId: string,
-	senderId: string,
+	options: SendChatMessageOptions,
 ): Promise<{ success: boolean; latencyMs: number }> {
+	const { broadcasterId, message, accessToken, clientId, senderId, db, env, allowRetry = true } = options;
 	const startTime = Date.now();
 
 	try {
@@ -31,8 +43,21 @@ export async function sendChatMessage(
 
 		const latencyMs = Date.now() - startTime;
 
+		if (response.status === 401 && allowRetry) {
+			// Token expired - try to refresh and retry once
+			console.log(`[Twitch] Received 401 for broadcaster ${broadcasterId}, attempting token refresh`);
+			const newToken = await forceRefreshAccessToken(db, env);
+			if (newToken) {
+				// Retry with new token
+				return sendChatMessage({
+					...options,
+					accessToken: newToken,
+					allowRetry: false, // Prevent infinite retry loops
+				});
+			}
+		}
+
 		if (!response.ok) {
-			// Ignore errors per plan - don't break the loop
 			console.warn(
 				`[Twitch] Chat send failed for broadcaster ${broadcasterId}:`,
 				response.status,

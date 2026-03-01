@@ -1,17 +1,29 @@
+import type { Database } from "../db";
+import { forceRefreshAccessToken } from "./auth";
+
 export interface TwitchStream {
 	user_id: string;
 	user_login: string;
 	user_name: string;
 }
 
+export interface GetLiveChannelsOptions {
+	gameId: string;
+	accessToken: string;
+	clientId: string;
+	db: Database;
+	env: Env;
+	allowRetry?: boolean;
+}
+
 /**
- * Fetch all live channels for a given game (paginated)
+ * Fetch all live channels for a given game (paginated).
+ * If a 401 Unauthorized error occurs, attempts to refresh the token and retry once.
  */
 export async function getLiveChannels(
-	gameId: string,
-	accessToken: string,
-	clientId: string,
+	options: GetLiveChannelsOptions,
 ): Promise<TwitchStream[]> {
+	const { gameId, accessToken, clientId, db, env, allowRetry = true } = options;
 	const streams: TwitchStream[] = [];
 	let cursor: string | undefined;
 
@@ -31,6 +43,20 @@ export async function getLiveChannels(
 				Authorization: `Bearer ${accessToken}`,
 			},
 		});
+
+		if (response.status === 401 && allowRetry) {
+			// Token expired - try to refresh and retry once
+			console.log("[Twitch] Received 401 while fetching streams, attempting token refresh");
+			const newToken = await forceRefreshAccessToken(db, env);
+			if (newToken) {
+				// Retry with new token
+				return getLiveChannels({
+					...options,
+					accessToken: newToken,
+					allowRetry: false, // Prevent infinite retry loops
+				});
+			}
+		}
 
 		if (!response.ok) {
 			console.error(

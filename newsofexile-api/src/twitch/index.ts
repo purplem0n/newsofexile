@@ -66,11 +66,13 @@ export async function notifyTwitch(
 	} else {
 		// Real mode: fetch live channels once per game, send each alert to all
 		if (poe1Alerts.length > 0) {
-			const channels = await getLiveChannels(
-				env.POE1_TWITCH_ID,
+			const channels = await getLiveChannels({
+				gameId: env.POE1_TWITCH_ID,
 				accessToken,
-				env.TWITCH_CLIENT_ID,
-			);
+				clientId: env.TWITCH_CLIENT_ID,
+				db,
+				env,
+			});
 			for (const alert of poe1Alerts) {
 				const message = buildMessage(alert);
 				for (const ch of channels) {
@@ -82,11 +84,13 @@ export async function notifyTwitch(
 			}
 		}
 		if (poe2Alerts.length > 0) {
-			const channels = await getLiveChannels(
-				env.POE2_TWITCH_ID,
+			const channels = await getLiveChannels({
+				gameId: env.POE2_TWITCH_ID,
 				accessToken,
-				env.TWITCH_CLIENT_ID,
-			);
+				clientId: env.TWITCH_CLIENT_ID,
+				db,
+				env,
+			});
 			for (const alert of poe2Alerts) {
 				const message = buildMessage(alert);
 				for (const ch of channels) {
@@ -112,13 +116,15 @@ export async function notifyTwitch(
 	}
 
 	for (const { broadcasterId, message } of deduped) {
-		const { latencyMs } = await sendChatMessage(
+		const { latencyMs } = await sendChatMessage({
 			broadcasterId,
 			message,
 			accessToken,
-			env.TWITCH_CLIENT_ID,
-			env.TWITCH_SENDER_ID,
-		);
+			clientId: env.TWITCH_CLIENT_ID,
+			senderId: env.TWITCH_SENDER_ID,
+			db,
+			env,
+		});
 
 		// Rate limit: wait before next send
 		const waitMs = getRateLimitWaitMs(latencyMs);

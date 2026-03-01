@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../db";
 import { twitchTokens } from "../db/schema";
 
-const TWITCH_TOKEN_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const TWITCH_TOKEN_REFRESH_INTERVAL_MS = 3 * 60 * 60 * 1000; // 3 hours
 
 /**
  * Get access token from DB, or from env if DB is empty.
@@ -53,6 +53,49 @@ export async function getAccessToken(db: Database, env: Env): Promise<string> {
 	});
 
 	return accessToken;
+}
+
+/**
+ * Force refresh the access token immediately and update the database.
+ * Use this when receiving a 401 Unauthorized error from Twitch API.
+ * Returns the new access token or null if refresh failed.
+ */
+export async function forceRefreshAccessToken(
+	db: Database,
+	env: Env,
+): Promise<string | null> {
+	console.log("[Twitch] Force refreshing access token due to 401 error");
+
+	const rows = await db.select().from(twitchTokens).limit(1);
+	const refreshToken = rows.length > 0 ? rows[0].refreshToken : env.REFRESH_TOKEN;
+
+	const refreshed = await refreshTwitchTokenWithToken(env, refreshToken);
+	if (!refreshed) {
+		console.error("[Twitch] Force token refresh failed");
+		return null;
+	}
+
+	if (rows.length > 0) {
+		await db
+			.update(twitchTokens)
+			.set({
+				accessToken: refreshed.access_token,
+				refreshToken: refreshed.refresh_token,
+				refreshedAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			})
+			.where(eq(twitchTokens.id, rows[0].id));
+	} else {
+		await db.insert(twitchTokens).values({
+			accessToken: refreshed.access_token,
+			refreshToken: refreshed.refresh_token,
+			refreshedAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		});
+	}
+
+	console.log("[Twitch] Force token refresh succeeded");
+	return refreshed.access_token;
 }
 
 interface TokenResponse {

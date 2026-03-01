@@ -54,8 +54,8 @@ export default {
 			} catch (error) {
 				console.error("[Scheduled] News scraper error:", error);
 			}
-		} else if (controller.cron === "0 0 * * *") {
-			// Twitch token refresh: daily at midnight UTC
+		} else if (controller.cron === "0 */3 * * *") {
+			// Twitch token refresh: every 3 hours
 			try {
 				const db = createDb(env.DB);
 				const ok = await refreshTwitchTokenCron(db, env);

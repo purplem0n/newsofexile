@@ -34,12 +34,16 @@ export function NewsApp() {
   const {
     readIds,
     readPatchUpdateIds,
+    acknowledgedTeaserIds,
     markAsRead,
     markPatchUpdateAsRead,
+    acknowledgeTeaserUpdate,
+    acknowledgeAllTeaserUpdates,
     markAllAsRead,
     markAllPatchUpdatesAsRead,
     hasUnread,
     hasUnreadPatchUpdates,
+    hasUnacknowledgedTeaserUpdates,
   } = useReadItems();
 
   // Extract all patch update IDs from items for "Mark all as read" functionality
@@ -55,21 +59,46 @@ export function NewsApp() {
     return updateIds;
   }, [items]);
 
-  // Check if there are any unread items (main news items or patch updates)
+  // Extract all teaser update IDs for "Mark all as read" functionality
+  const allTeaserIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const item of items) {
+      if (item.teaserUpdates && item.teaserUpdates.length > 0) {
+        for (const update of item.teaserUpdates) {
+          ids.push(`${item.id}:${update.id}`);
+        }
+      }
+    }
+    return ids;
+  }, [items]);
+
+  // Check if there are any unread items (main news items, patch updates, or unacknowledged teasers)
   const hasAnyUnread = useMemo(() => {
     const ids = items.map((item) => item.id as string | number);
     const hasUnreadMainItems = hasUnread(ids);
     const hasUnreadPatches = hasUnreadPatchUpdates(allPatchUpdateIds);
-    return hasUnreadMainItems || hasUnreadPatches;
-  }, [items, hasUnread, hasUnreadPatchUpdates, allPatchUpdateIds]);
+    // Check for unacknowledged teaser updates
+    const hasUnreadTeasers = items.some(
+      (item) =>
+        item.teaserUpdates &&
+        item.teaserUpdates.length > 0 &&
+        hasUnacknowledgedTeaserUpdates(
+          item.id,
+          item.teaserUpdates.map((u) => u.id)
+        )
+    );
+    return hasUnreadMainItems || hasUnreadPatches || hasUnreadTeasers;
+  }, [items, hasUnread, hasUnreadPatchUpdates, hasUnacknowledgedTeaserUpdates, allPatchUpdateIds]);
 
-  // Handle marking all items as read (including patch updates)
+  // Handle marking all items as read (including patch updates and teaser IDs)
   const handleMarkAllRead = useCallback(() => {
     const ids = items.map((item) => item.id as string | number);
     markAllAsRead(ids);
     // Also mark all patch updates as read
     markAllPatchUpdatesAsRead(allPatchUpdateIds);
-  }, [items, markAllAsRead, markAllPatchUpdatesAsRead, allPatchUpdateIds]);
+    // Also acknowledge all teaser updates
+    acknowledgeAllTeaserUpdates(allTeaserIds);
+  }, [items, markAllAsRead, markAllPatchUpdatesAsRead, acknowledgeAllTeaserUpdates, allPatchUpdateIds, allTeaserIds]);
 
   // Handle filter change - update URL
   const handleFilterChange = useCallback((newFilter: NewsCategory) => {
@@ -100,8 +129,10 @@ export function NewsApp() {
             onRetry={refresh}
             readIds={readIds}
             readPatchUpdateIds={readPatchUpdateIds}
+            acknowledgedTeaserIds={acknowledgedTeaserIds}
             onItemClick={markAsRead}
             onPatchUpdateClick={markPatchUpdateAsRead}
+            onTeaserUpdateAcknowledge={acknowledgeTeaserUpdate}
           />
         )}
 

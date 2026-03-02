@@ -2,26 +2,27 @@ import { useState, useCallback, useEffect } from "react";
 
 const STORAGE_KEY = "news-of-exile-read-items";
 const PATCH_UPDATES_STORAGE_KEY = "news-of-exile-read-patch-updates";
-const TEASER_UPDATES_STORAGE_KEY = "news-of-exile-read-teaser-updates";
+// Store acknowledged teaser update IDs: "newsItemId:teaserUpdateId"
+const TEASER_UPDATES_STORAGE_KEY = "news-of-exile-teaser-updates";
 
 type ItemId = string | number;
 
 interface ReadItemsState {
   readIds: Set<string>;
   readPatchUpdateIds: Set<string>;
-  readTeaserUpdateIds: Set<string>;
+  acknowledgedTeaserIds: Set<string>; // Format: "newsItemId:teaserUpdateId"
   markAsRead: (id: ItemId) => void;
   markPatchUpdateAsRead: (id: ItemId) => void;
-  markTeaserUpdateAsRead: (id: ItemId) => void;
+  acknowledgeTeaserUpdate: (newsItemId: ItemId, teaserUpdateId: ItemId) => void;
   markAllAsRead: (ids: ItemId[]) => void;
   markAllPatchUpdatesAsRead: (ids: ItemId[]) => void;
-  markAllTeaserUpdatesAsRead: (ids: ItemId[]) => void;
+  acknowledgeAllTeaserUpdates: (ids: string[]) => void;
   isRead: (id: ItemId) => boolean;
   isPatchUpdateRead: (id: ItemId) => boolean;
-  isTeaserUpdateRead: (id: ItemId) => boolean;
+  isTeaserUpdateAcknowledged: (newsItemId: ItemId, teaserUpdateId: ItemId) => boolean;
   hasUnread: (allIds: ItemId[]) => boolean;
   hasUnreadPatchUpdates: (allIds: ItemId[]) => boolean;
-  hasUnreadTeaserUpdates: (allIds: ItemId[]) => boolean;
+  hasUnacknowledgedTeaserUpdates: (newsItemId: ItemId, teaserUpdateIds: ItemId[]) => boolean;
 }
 
 function toStringId(id: ItemId): string {
@@ -63,8 +64,8 @@ export function useReadItems(): ReadItemsState {
     return new Set();
   });
 
-  // Teaser updates read state
-  const [readTeaserUpdateIds, setReadTeaserUpdateIds] = useState<Set<string>>(() => {
+  // Teaser updates acknowledged by ID: "newsItemId:teaserUpdateId"
+  const [acknowledgedTeaserIds, setAcknowledgedTeaserIds] = useState<Set<string>>(() => {
     if (typeof window === "undefined") {
       return new Set();
     }
@@ -102,16 +103,16 @@ export function useReadItems(): ReadItemsState {
     }
   }, [readPatchUpdateIds]);
 
-  // Persist teaser updates to localStorage
+  // Persist acknowledged teaser IDs to localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
       try {
-        localStorage.setItem(TEASER_UPDATES_STORAGE_KEY, JSON.stringify([...readTeaserUpdateIds]));
+        localStorage.setItem(TEASER_UPDATES_STORAGE_KEY, JSON.stringify([...acknowledgedTeaserIds]));
       } catch {
         // ignore
       }
     }
-  }, [readTeaserUpdateIds]);
+  }, [acknowledgedTeaserIds]);
 
   const markAsRead = useCallback((id: ItemId) => {
     const strId = toStringId(id);
@@ -133,12 +134,13 @@ export function useReadItems(): ReadItemsState {
     });
   }, []);
 
-  const markTeaserUpdateAsRead = useCallback((id: ItemId) => {
-    const strId = toStringId(id);
-    setReadTeaserUpdateIds((prev) => {
-      if (prev.has(strId)) return prev;
+  // Acknowledge a specific teaser update by its ID
+  const acknowledgeTeaserUpdate = useCallback((newsItemId: ItemId, teaserUpdateId: ItemId) => {
+    const key = `${toStringId(newsItemId)}:${toStringId(teaserUpdateId)}`;
+    setAcknowledgedTeaserIds((prev) => {
+      if (prev.has(key)) return prev;
       const next = new Set(prev);
-      next.add(strId);
+      next.add(key);
       return next;
     });
   }, []);
@@ -159,10 +161,11 @@ export function useReadItems(): ReadItemsState {
     });
   }, []);
 
-  const markAllTeaserUpdatesAsRead = useCallback((ids: ItemId[]) => {
-    setReadTeaserUpdateIds((prev) => {
+  // Acknowledge multiple teaser update IDs at once
+  const acknowledgeAllTeaserUpdates = useCallback((ids: string[]) => {
+    setAcknowledgedTeaserIds((prev) => {
       const next = new Set(prev);
-      ids.forEach((id) => next.add(toStringId(id)));
+      ids.forEach((id) => next.add(id));
       return next;
     });
   }, []);
@@ -181,11 +184,13 @@ export function useReadItems(): ReadItemsState {
     [readPatchUpdateIds]
   );
 
-  const isTeaserUpdateRead = useCallback(
-    (id: ItemId) => {
-      return readTeaserUpdateIds.has(toStringId(id));
+  // Check if a specific teaser update has been acknowledged
+  const isTeaserUpdateAcknowledged = useCallback(
+    (newsItemId: ItemId, teaserUpdateId: ItemId) => {
+      const key = `${toStringId(newsItemId)}:${toStringId(teaserUpdateId)}`;
+      return acknowledgedTeaserIds.has(key);
     },
-    [readTeaserUpdateIds]
+    [acknowledgedTeaserIds]
   );
 
   const hasUnread = useCallback(
@@ -202,28 +207,31 @@ export function useReadItems(): ReadItemsState {
     [readPatchUpdateIds]
   );
 
-  const hasUnreadTeaserUpdates = useCallback(
-    (allIds: ItemId[]) => {
-      return allIds.some((id) => !readTeaserUpdateIds.has(toStringId(id)));
+  // Check if there are any unacknowledged teaser updates for a news item
+  const hasUnacknowledgedTeaserUpdates = useCallback(
+    (newsItemId: ItemId, teaserUpdateIds: ItemId[]) => {
+      return teaserUpdateIds.some(
+        (id) => !isTeaserUpdateAcknowledged(newsItemId, id)
+      );
     },
-    [readTeaserUpdateIds]
+    [isTeaserUpdateAcknowledged]
   );
 
   return {
     readIds,
     readPatchUpdateIds,
-    readTeaserUpdateIds,
+    acknowledgedTeaserIds,
     markAsRead,
     markPatchUpdateAsRead,
-    markTeaserUpdateAsRead,
+    acknowledgeTeaserUpdate,
     markAllAsRead,
     markAllPatchUpdatesAsRead,
-    markAllTeaserUpdatesAsRead,
+    acknowledgeAllTeaserUpdates,
     isRead,
     isPatchUpdateRead,
-    isTeaserUpdateRead,
+    isTeaserUpdateAcknowledged,
     hasUnread,
     hasUnreadPatchUpdates,
-    hasUnreadTeaserUpdates,
+    hasUnacknowledgedTeaserUpdates,
   };
 }

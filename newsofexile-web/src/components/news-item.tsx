@@ -9,8 +9,10 @@ interface NewsItemProps {
   item: NewsItem;
   isRead?: boolean;
   readPatchUpdateIds?: Set<string>;
+  acknowledgedTeaserIds?: Set<string>; // Format: "newsItemId:teaserUpdateId"
   onItemClick?: (id: string) => void;
   onPatchUpdateClick?: (id: number) => void;
+  onTeaserUpdateAcknowledge?: (newsItemId: number, teaserUpdateId: number) => void;
 }
 
 // Check if a news item is a Content Update patch note
@@ -34,11 +36,13 @@ function isNewItem(item: NewsItem): boolean {
 }
 
 // Check if an item has been recently updated (teaser or patch update)
-// If the item is marked as read, we consider the user has "seen" the update
-function isRecentlyUpdated(item: NewsItem, isRead?: boolean): boolean {
-  // If user has read the item, they have acknowledged the update
-  if (isRead) return false;
-
+// For teasers, we check if there are unacknowledged teaser update IDs
+// For patch notes, we check if the item itself is unread
+function isRecentlyUpdated(
+  item: NewsItem,
+  isRead: boolean,
+  acknowledgedTeaserIds: Set<string> | undefined
+): boolean {
   const lastUpdated = new Date(item.lastUpdatedAt);
   const postedAt = item.postedAt ? new Date(item.postedAt) : null;
   const now = new Date();
@@ -53,7 +57,23 @@ function isRecentlyUpdated(item: NewsItem, isRead?: boolean): boolean {
 
     // Check if the update is recent (within threshold)
     const timeSinceUpdate = now.getTime() - lastUpdated.getTime();
-    return timeSinceUpdate <= UPDATED_ITEM_THRESHOLD_HOURS * 60 * 60 * 1000;
+    const isRecent = timeSinceUpdate <= UPDATED_ITEM_THRESHOLD_HOURS * 60 * 60 * 1000;
+    if (!isRecent) return false;
+
+    // For teaser posts, check if there are unacknowledged teaser update IDs
+    if (item.teaserUpdates && item.teaserUpdates.length > 0) {
+      const unacknowledged = item.teaserUpdates.some(
+        (update) => !acknowledgedTeaserIds?.has(`${item.id}:${update.id}`)
+      );
+      return unacknowledged;
+    }
+
+    // For patch note updates, check if the item itself is unread
+    if (item.patchUpdates && item.patchUpdates.length > 0) {
+      return !isRead;
+    }
+
+    return false;
   }
 
   return false;
@@ -271,8 +291,10 @@ export function NewsItemCard({
   item,
   isRead,
   readPatchUpdateIds,
+  acknowledgedTeaserIds,
   onItemClick,
   onPatchUpdateClick,
+  onTeaserUpdateAcknowledge,
 }: NewsItemProps) {
   const formattedDateTime = item.postedAt
     ? new Intl.DateTimeFormat("en-US", {
@@ -289,7 +311,7 @@ export function NewsItemCard({
     : null;
 
   const isNew = isNewItem(item) && !isRead;
-  const isUpdated = isRecentlyUpdated(item, isRead);
+  const isUpdated = isRecentlyUpdated(item, isRead ?? false, acknowledgedTeaserIds);
   const isContentUpdate = isContentUpdatePatch(item);
   const itemHasUpdates = hasUpdates(item);
 
@@ -307,10 +329,17 @@ export function NewsItemCard({
   );
 
   const handleClick = useCallback(() => {
+    // Mark as read when clicking a new item
     if (onItemClick && isNew) {
       onItemClick(String(item.id));
     }
-  }, [onItemClick, item.id, isNew]);
+    // Acknowledge all teaser updates when clicking an updated teaser item
+    if (onTeaserUpdateAcknowledge && isUpdated && item.teaserUpdates) {
+      item.teaserUpdates.forEach((update) => {
+        onTeaserUpdateAcknowledge(item.id, update.id);
+      });
+    }
+  }, [onItemClick, onTeaserUpdateAcknowledge, item.id, item.teaserUpdates, isNew, isUpdated]);
 
   const handleOpenModal = useCallback((update: PatchNoteUpdate) => {
     setSelectedUpdate(update);

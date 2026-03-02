@@ -185,23 +185,6 @@ export const teaserUpdatesRelations = relations(teaserUpdates, ({ one }) => ({
   }),
 }));
 
-/**
- * Twitch OAuth tokens for chat/API access
- * Tokens are refreshed every 24hrs
- */
-export const twitchTokens = sqliteTable("twitch_tokens", {
-  id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
-  accessToken: text("access_token").notNull(),
-  refreshToken: text("refresh_token").notNull(),
-  // When the access token was last refreshed - stored as ISO string
-  refreshedAt: text("refreshed_at")
-    .notNull()
-    .$default(() => new Date().toISOString()),
-  updatedAt: text("updated_at")
-    .notNull()
-    .$default(() => new Date().toISOString()),
-});
-
 // Type exports for TypeScript
 export type NewsItem = typeof newsItems.$inferSelect;
 export type NewNewsItem = typeof newsItems.$inferInsert;
@@ -211,5 +194,3 @@ export type PatchNoteUpdate = typeof patchNoteUpdates.$inferSelect;
 export type NewPatchNoteUpdate = typeof patchNoteUpdates.$inferInsert;
 export type TeaserUpdate = typeof teaserUpdates.$inferSelect;
 export type NewTeaserUpdate = typeof teaserUpdates.$inferInsert;
-export type TwitchToken = typeof twitchTokens.$inferSelect;
-export type NewTwitchToken = typeof twitchTokens.$inferInsert;

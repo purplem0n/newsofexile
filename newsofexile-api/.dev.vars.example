@@ -1,13 +1,2 @@
 # Copy to .dev.vars for local development (wrangler dev loads .dev.vars)
 # These vars are also set as secrets in production: wrangler secret put VAR_NAME
-
-# Twitch Integration
-TWITCH_CLIENT_ID="your_client_id"
-TWITCH_CLIENT_SECRET="your_client_secret"
-ACCESS_TOKEN="your_access_token"
-REFRESH_TOKEN="your_refresh_token"
-TWITCH_SENDER_ID="your_sender_user_id"
-TWITCH_DRY_RUN_CHANNEL_ID="channel_id_for_testing"
-DRY_RUN_MODE="1"
-POE1_TWITCH_ID="29307"
-POE2_TWITCH_ID="1702520304"

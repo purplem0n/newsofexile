@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
 import { eq, sql, and } from "drizzle-orm";
 import { Database, kvCache } from "../db";
-import { newsItems, systemState, patchNoteUpdates } from "../db/schema";
+import { newsItems, systemState, patchNoteUpdates, teaserUpdates } from "../db/schema";
 import { notifyTwitch, type NewsAlert } from "../twitch";
 
 // Forum sources to scrape
@@ -112,12 +112,12 @@ function countWords(text: string): number {
 }
 
 /**
- * Fetch content (preview + word count) for a single news item
+ * Fetch content (preview + word count + full text) for a single news item
  */
 async function fetchContent(
 	url: string,
 	poeCookie?: string,
-): Promise<{ preview: string; wordCount: number } | null> {
+): Promise<{ preview: string; wordCount: number; fullText: string } | null> {
 	try {
 		const headers: Record<string, string> = {
 			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
@@ -142,7 +142,7 @@ async function fetchContent(
 		const preview = getFirstWords(text, PREVIEW_WORD_COUNT);
 		const wordCount = countWords(text);
 
-		return { preview, wordCount };
+		return { preview, wordCount, fullText: text };
 	} catch (error) {
 		console.error(`[${JOB_NAME}] Error fetching content from ${url}:`, error);
 		return null;
@@ -570,6 +570,7 @@ async function storePatchUpdates(
 	updates: PatchUpdate[],
 ): Promise<{ count: number; storedUpdates: Array<{ updateDate: string }> }> {
 	const storedUpdates: Array<{ updateDate: string }> = [];
+	let hasNewUpdates = false;
 
 	for (const update of updates) {
 		const exists = await patchUpdateExists(db, newsItemId, update.updateDate);
@@ -588,12 +589,130 @@ async function storePatchUpdates(
 		});
 
 		storedUpdates.push({ updateDate: update.updateDate });
+		hasNewUpdates = true;
 		console.log(
 			`[${JOB_NAME}] Stored patch update for news item ${newsItemId}: ${update.updateDate} (${update.isPoe1Format ? 'POE1' : 'POE2'} format)`,
 		);
 	}
 
+	// Update the parent news item's lastUpdatedAt to surface it
+	if (hasNewUpdates) {
+		await db
+			.update(newsItems)
+			.set({ lastUpdatedAt: new Date().toISOString() })
+			.where(eq(newsItems.id, newsItemId));
+	}
+
 	return { count: storedUpdates.length, storedUpdates };
+}
+
+/**
+ * Check if a news item is a "Teasers" post
+ * These posts receive progressive updates from GGG with new content
+ */
+function isTeaserPost(title: string, sourceType: string): boolean {
+	// Only check news posts (not patch notes)
+	if (!sourceType.includes('news')) {
+		return false;
+	}
+
+	// Check if title contains "teasers" (case insensitive)
+	return /teasers/i.test(title);
+}
+
+/**
+ * Generate a simple content hash for comparing teaser content
+ */
+function generateContentHash(text: string): string {
+	// Simple hash function: sum of char codes * position, mod to keep within reasonable range
+	let hash = 0;
+	for (let i = 0; i < text.length; i++) {
+		const char = text.charCodeAt(i);
+		hash = ((hash << 5) - hash) + char + (i * 7);
+		hash = hash & hash; // Convert to 32bit integer
+	}
+	// Return as positive hex string with word count appended for extra uniqueness
+	return `${Math.abs(hash).toString(16)}-${text.split(/\s+/).length}`;
+}
+
+/**
+ * Check if a teaser update already exists in the database
+ */
+async function teaserUpdateExists(
+	db: Database,
+	newsItemId: number,
+	contentHash: string,
+): Promise<boolean> {
+	const existing = await db
+		.select({ id: teaserUpdates.id })
+		.from(teaserUpdates)
+		.where(
+			and(
+				eq(teaserUpdates.newsItemId, newsItemId),
+				eq(teaserUpdates.contentHash, contentHash),
+			),
+		)
+		.limit(1);
+
+	return existing.length > 0;
+}
+
+/**
+ * Get the latest teaser update for a news item
+ */
+async function getLatestTeaserUpdate(
+	db: Database,
+	newsItemId: number,
+): Promise<{ contentHash: string; wordCount: number } | null> {
+	const result = await db
+		.select({
+			contentHash: teaserUpdates.contentHash,
+			wordCount: teaserUpdates.wordCount,
+		})
+		.from(teaserUpdates)
+		.where(eq(teaserUpdates.newsItemId, newsItemId))
+		.orderBy(sql`${teaserUpdates.scrapedAt} DESC`)
+		.limit(1);
+
+	return result.length > 0 ? result[0] : null;
+}
+
+/**
+ * Store a detected teaser update in the database
+ * Returns true if a new update was stored, false if it already existed
+ */
+async function storeTeaserUpdate(
+	db: Database,
+	newsItemId: number,
+	contentHash: string,
+	wordCount: number,
+	contentText: string,
+): Promise<boolean> {
+	const exists = await teaserUpdateExists(db, newsItemId, contentHash);
+	if (exists) {
+		return false;
+	}
+
+	await db.insert(teaserUpdates).values({
+		newsItemId,
+		contentHash,
+		wordCount,
+		contentText,
+		scrapedAt: new Date().toISOString(),
+		updatedAt: new Date().toISOString(),
+	});
+
+	// Update the parent news item's lastUpdatedAt to surface it
+	await db
+		.update(newsItems)
+		.set({ lastUpdatedAt: new Date().toISOString() })
+		.where(eq(newsItems.id, newsItemId));
+
+	console.log(
+		`[${JOB_NAME}] Stored teaser update for news item ${newsItemId}: ${wordCount} words (hash: ${contentHash})`,
+	);
+
+	return true;
 }
 
 /**
@@ -703,14 +822,118 @@ async function checkExistingPatchNotesForUpdates(
 }
 
 /**
+ * Fetch and check for updates on existing Teaser posts
+ * This runs after scraping new items to detect any new teaser content GGG may have added
+ */
+async function checkExistingTeasersForUpdates(
+	db: Database,
+	poeCookie?: string,
+): Promise<{ count: number; alerts: NewsAlert[] }> {
+	let totalUpdatesFound = 0;
+	const alerts: NewsAlert[] = [];
+
+	// Get all active Teaser posts from the last 60 days (teasers stay relevant longer)
+	const sixtyDaysAgo = new Date();
+	sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+
+	const existingTeasers = await db
+		.select({
+			id: newsItems.id,
+			title: newsItems.title,
+			url: newsItems.url,
+			sourceType: newsItems.sourceType,
+		})
+		.from(newsItems)
+		.where(
+			and(
+				sql`${newsItems.sourceType} LIKE '%news%'`,
+				eq(newsItems.isActive, true),
+				sql`${newsItems.postedAt} > ${sixtyDaysAgo.toISOString()}`,
+			),
+		)
+		.limit(30);
+
+	// Filter to only Teaser posts
+	const teaserPosts = existingTeasers.filter((item) =>
+		isTeaserPost(item.title, item.sourceType),
+	);
+
+	console.log(
+		`[${JOB_NAME}] Checking ${teaserPosts.length} Teaser posts for updates`,
+	);
+
+	for (const teaser of teaserPosts) {
+		try {
+			console.log(`[${JOB_NAME}] Checking updates for: ${teaser.title}`);
+
+			// Fetch the full HTML content
+			const headers: Record<string, string> = {
+				"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+				Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+				"Accept-Language": "en-US,en;q=0.9",
+			};
+
+			if (poeCookie) {
+				headers["Cookie"] = poeCookie;
+			}
+
+			const response = await fetch(teaser.url, { headers });
+			if (!response.ok) {
+				console.error(
+					`[${JOB_NAME}] Failed to fetch ${teaser.url}: HTTP ${response.status}`,
+				);
+				continue;
+			}
+
+			const html = await response.text();
+
+			// Extract text content from HTML
+			const text = extractTextFromHtml(html);
+			const wordCount = countWords(text);
+			const contentHash = generateContentHash(text);
+
+			// Check if this is a new update
+			const isNewUpdate = await storeTeaserUpdate(
+				db,
+				teaser.id,
+				contentHash,
+				wordCount,
+				text,
+			);
+
+			if (isNewUpdate) {
+				totalUpdatesFound++;
+				alerts.push({
+					title: teaser.title,
+					url: teaser.url,
+					sourceType: teaser.sourceType,
+				});
+			} else {
+				console.log(`[${JOB_NAME}] No updates found for ${teaser.title}`);
+			}
+
+			// Delay between checks to be polite
+			await new Promise((resolve) => setTimeout(resolve, REQUEST_DELAY_MS));
+		} catch (error) {
+			console.error(
+				`[${JOB_NAME}] Error checking updates for ${teaser.title}:`,
+				error,
+			);
+		}
+	}
+
+	return { count: totalUpdatesFound, alerts };
+}
+
+/**
  * Invalidate news list cache for specific source types
  * Always invalidates the "all" cache, plus caches for source types that had new items
- * Also invalidates when patch updates are found (since they're included in the main response)
+ * Also invalidates when patch updates or teaser updates are found (since they're included in the main response)
  */
 async function invalidateNewsCache(
 	kv: KVNamespace,
 	sourceTypesWithNewItems: Set<string>,
-	patchUpdatesFound: boolean = false,
+	updatesFound: { patch: boolean; teaser: boolean } = { patch: false, teaser: false },
 ): Promise<void> {
 	const keysToDelete: string[] = [];
 
@@ -727,13 +950,13 @@ async function invalidateNewsCache(
 
 	console.log(`[${JOB_NAME}] Cache invalidated: ${keysToDelete.length} keys deleted`, {
 		sourceTypes: Array.from(sourceTypesWithNewItems),
-		patchUpdatesFound,
+		updatesFound,
 	});
 }
 
 /**
  * Main job: Scrape index, check for new items, fetch content, insert with preview
- * Also checks existing Content Update patch notes for updates from GGG
+ * Also checks existing Content Update patch notes and Teaser posts for updates from GGG
  */
 export async function runNewsScraper(
 	db: Database,
@@ -745,6 +968,7 @@ export async function runNewsScraper(
 	scraped: number;
 	newItems: number;
 	newPatchUpdates: number;
+	newTeaserUpdates: number;
 	error?: string;
 }> {
 	console.log(`[${JOB_NAME}] Starting news scraper job`);
@@ -752,18 +976,19 @@ export async function runNewsScraper(
 	const hasLock = await acquireLock(db);
 	if (!hasLock) {
 		console.log(`[${JOB_NAME}] Job already running, skipping`);
-		return { success: true, scraped: 0, newItems: 0, newPatchUpdates: 0 };
+		return { success: true, scraped: 0, newItems: 0, newPatchUpdates: 0, newTeaserUpdates: 0 };
 	}
 
 	let totalScraped = 0;
 	let totalNew = 0;
 	let newPatchUpdates = 0;
+	let newTeaserUpdates = 0;
 	let jobError: Error | null = null;
 
 	// Track which source types had new items (for targeted cache invalidation)
 	const sourceTypesWithNewItems = new Set<string>();
-	// Track if patch updates were found (to invalidate cache since updates are in main response)
-	let patchUpdatesFound = false;
+	// Track if patch or teaser updates were found (to invalidate cache since updates are in main response)
+	const updatesFound = { patch: false, teaser: false };
 	// Collect alerts for Twitch notification
 	const twitchAlerts: NewsAlert[] = [];
 
@@ -793,40 +1018,56 @@ export async function runNewsScraper(
 				console.log(`[${JOB_NAME}] Fetching content from ${item.url}`);
 				const content = await fetchContent(item.url, poeCookie);
 
-				// Check if this is a Content Update patch note and extract any updates
-				let patchUpdates: PatchUpdate[] = [];
-				if (isContentUpdatePatch(item.title, source.type)) {
-					console.log(`[${JOB_NAME}] Detected Content Update patch note, checking for updates`);
-					// Fetch the full HTML to check for updates
-					const headers: Record<string, string> = {
-						"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
-						Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-						"Accept-Language": "en-US,en;q=0.9",
-					};
-					if (poeCookie) {
-						headers["Cookie"] = poeCookie;
-					}
-					const response = await fetch(item.url, { headers });
-					if (response.ok) {
-						const html = await response.text();
-						patchUpdates = extractPatchUpdates(html);
-					}
-				}
+			// Check if this is a Content Update patch note and extract any updates
+			let patchUpdates: PatchUpdate[] = [];
+			let isTeaser = false;
+			let teaserContent: { text: string; wordCount: number; hash: string } | null = null;
 
-				// Insert with all data including preview and word count
-				await db.insert(newsItems).values({
-					sourceId: item.sourceId,
-					sourceType: source.type,
-					title: item.title,
-					url: item.url,
-					author: item.author,
-					postedAt: item.postedAt?.toISOString() || null,
-					scrapedAt: new Date().toISOString(),
-					preview: content?.preview || null,
-					wordCount: content?.wordCount || 0,
-					contentFetchedAt: new Date().toISOString(),
-					isActive: true,
-				});
+			if (isContentUpdatePatch(item.title, source.type)) {
+				console.log(`[${JOB_NAME}] Detected Content Update patch note, checking for updates`);
+				// Fetch the full HTML to check for updates
+				const headers: Record<string, string> = {
+					"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+					Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+					"Accept-Language": "en-US,en;q=0.9",
+				};
+				if (poeCookie) {
+					headers["Cookie"] = poeCookie;
+				}
+				const response = await fetch(item.url, { headers });
+				if (response.ok) {
+					const html = await response.text();
+					patchUpdates = extractPatchUpdates(html);
+				}
+			}
+
+			// Check if this is a Teaser post
+			if (isTeaserPost(item.title, source.type)) {
+				isTeaser = true;
+				console.log(`[${JOB_NAME}] Detected Teaser post, storing initial content`);
+				// Use the already fetched content
+				const text = content?.fullText || '';
+				const wordCount = content?.wordCount || 0;
+				const hash = generateContentHash(text);
+				teaserContent = { text, wordCount, hash };
+			}
+
+// Insert with all data including preview and word count
+			const now = new Date().toISOString();
+			await db.insert(newsItems).values({
+				sourceId: item.sourceId,
+				sourceType: source.type,
+				title: item.title,
+				url: item.url,
+				author: item.author,
+				postedAt: item.postedAt?.toISOString() || null,
+				scrapedAt: now,
+				preview: content?.preview || null,
+				wordCount: content?.wordCount || 0,
+				contentFetchedAt: now,
+				isActive: true,
+				lastUpdatedAt: now,
+			});
 
 				totalNew++;
 				console.log(`[${JOB_NAME}] Inserted: ${item.title} (${content?.wordCount || 0} words)`);
@@ -844,42 +1085,67 @@ export async function runNewsScraper(
 					});
 				}
 
-				// Store any patch updates that were found for this new item
-				if (patchUpdates.length > 0) {
-					// Get the inserted item's ID
-					const insertedItem = await db
-						.select({ id: newsItems.id })
-						.from(newsItems)
-						.where(
-							and(
-								eq(newsItems.sourceId, item.sourceId),
-								eq(newsItems.sourceType, source.type),
-							),
-						)
-						.limit(1);
+// Store any patch updates that were found for this new item
+			if (patchUpdates.length > 0) {
+				// Get the inserted item's ID
+				const insertedItem = await db
+					.select({ id: newsItems.id })
+					.from(newsItems)
+					.where(
+						and(
+							eq(newsItems.sourceId, item.sourceId),
+							eq(newsItems.sourceType, source.type),
+						),
+					)
+					.limit(1);
 
-					if (insertedItem.length > 0) {
-						const { count, storedUpdates } = await storePatchUpdates(
-							db,
-							insertedItem[0].id,
-							patchUpdates,
-						);
-						newPatchUpdates += count;
-						if (count > 0) {
-							patchUpdatesFound = true;
-							for (const u of storedUpdates) {
-								twitchAlerts.push({
-									title: item.title,
-									url: item.url,
-									sourceType: source.type,
-									updateDate: u.updateDate,
-								});
-							}
+				if (insertedItem.length > 0) {
+					const { count, storedUpdates } = await storePatchUpdates(
+						db,
+						insertedItem[0].id,
+						patchUpdates,
+					);
+					newPatchUpdates += count;
+					if (count > 0) {
+						updatesFound.patch = true;
+						for (const u of storedUpdates) {
+							twitchAlerts.push({
+								title: item.title,
+								url: item.url,
+								sourceType: source.type,
+								updateDate: u.updateDate,
+							});
 						}
 					}
 				}
+			}
 
-				// Delay between content fetches to be polite
+			// Store initial teaser content for new teaser posts
+			if (isTeaser && teaserContent) {
+				// Get the inserted item's ID
+				const insertedItem = await db
+					.select({ id: newsItems.id })
+					.from(newsItems)
+					.where(
+						and(
+							eq(newsItems.sourceId, item.sourceId),
+							eq(newsItems.sourceType, source.type),
+						),
+					)
+					.limit(1);
+
+				if (insertedItem.length > 0) {
+					await storeTeaserUpdate(
+						db,
+						insertedItem[0].id,
+						teaserContent.hash,
+						teaserContent.wordCount,
+						teaserContent.text,
+					);
+				}
+			}
+
+			// Delay between content fetches to be polite
 				if (i < items.length - 1) {
 					await new Promise((resolve) => setTimeout(resolve, REQUEST_DELAY_MS));
 				}
@@ -893,15 +1159,25 @@ export async function runNewsScraper(
 
 		// Check existing Content Update patch notes for updates
 		console.log(`[${JOB_NAME}] Checking existing Content Update patch notes for updates`);
-		const { count: existingCount, alerts: existingAlerts } =
+		const { count: existingPatchCount, alerts: existingPatchAlerts } =
 			await checkExistingPatchNotesForUpdates(db, poeCookie);
-		newPatchUpdates += existingCount;
-		if (existingCount > 0) {
-			patchUpdatesFound = true;
-			twitchAlerts.push(...existingAlerts);
+		newPatchUpdates += existingPatchCount;
+		if (existingPatchCount > 0) {
+			updatesFound.patch = true;
+			twitchAlerts.push(...existingPatchAlerts);
 		}
 
-		console.log(`[${JOB_NAME}] Completed: ${totalScraped} scraped, ${totalNew} new items, ${newPatchUpdates} patch updates`);
+		// Check existing Teaser posts for updates
+		console.log(`[${JOB_NAME}] Checking existing Teaser posts for updates`);
+		const { count: existingTeaserCount, alerts: existingTeaserAlerts } =
+			await checkExistingTeasersForUpdates(db, poeCookie);
+		newTeaserUpdates += existingTeaserCount;
+		if (existingTeaserCount > 0) {
+			updatesFound.teaser = true;
+			twitchAlerts.push(...existingTeaserAlerts);
+		}
+
+		console.log(`[${JOB_NAME}] Completed: ${totalScraped} scraped, ${totalNew} new items, ${newPatchUpdates} patch updates, ${newTeaserUpdates} teaser updates`);
 
 		// Twitch notification for new news/patch items
 		if (twitchEnv && twitchAlerts.length > 0) {
@@ -912,10 +1188,10 @@ export async function runNewsScraper(
 			}
 		}
 
-		// Invalidate cache if new items were added or patch updates were found
-		// (patch updates are included in main response, so we need to invalidate)
-		if (kv && (totalNew > 0 || patchUpdatesFound)) {
-			await invalidateNewsCache(kv, sourceTypesWithNewItems, patchUpdatesFound);
+		// Invalidate cache if new items were added or any updates were found
+		// (updates are included in main response, so we need to invalidate)
+		if (kv && (totalNew > 0 || updatesFound.patch || updatesFound.teaser)) {
+			await invalidateNewsCache(kv, sourceTypesWithNewItems, updatesFound);
 		}
 	} catch (error) {
 		jobError = error instanceof Error ? error : new Error(String(error));
@@ -929,6 +1205,7 @@ export async function runNewsScraper(
 		scraped: totalScraped,
 		newItems: totalNew,
 		newPatchUpdates,
+		newTeaserUpdates,
 		error: jobError?.message,
 	};
 }

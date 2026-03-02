@@ -19,6 +19,16 @@ export interface PatchNoteUpdate {
   scrapedAt: string;
 }
 
+// Teaser update matching API response structure
+export interface TeaserUpdate {
+  id: number;
+  newsItemId?: number;
+  contentHash: string;
+  wordCount: number;
+  contentText: string;
+  scrapedAt: string;
+}
+
 // News item matching API response structure
 export interface NewsItem {
   id: number;
@@ -33,8 +43,11 @@ export interface NewsItem {
   scrapedAt: string; // ISO date string
   contentFetchedAt: string | null;
   isActive: boolean;
+  lastUpdatedAt: string; // ISO date string - used to surface updated items
   // Patch updates are included for Content Update patch notes
   patchUpdates?: PatchNoteUpdate[];
+  // Teaser updates are included for Teaser posts
+  teaserUpdates?: TeaserUpdate[];
 }
 
 // API response structure

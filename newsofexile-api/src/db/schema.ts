@@ -46,6 +46,10 @@ export const newsItems = sqliteTable(
     updatedAt: text("updated_at")
       .notNull()
       .$default(() => new Date().toISOString()),
+    // When this item was last updated (new content detected) - stored as ISO string
+    // This is used to surface updated items (teaser updates, patch note updates)
+    lastUpdatedAt: text("last_updated_at")
+      .$default(() => new Date().toISOString()),
   },
   (table) => [
     // Ensure unique combination of source ID and type
@@ -54,6 +58,8 @@ export const newsItems = sqliteTable(
     index("source_type_idx").on(table.sourceType),
     // Index for sorting by posted date
     index("posted_at_idx").on(table.postedAt),
+    // Index for sorting by last update (for surfacing updated items)
+    index("last_updated_at_idx").on(table.lastUpdatedAt),
     // Index for active items
     index("active_idx").on(table.isActive),
   ]
@@ -121,15 +127,60 @@ export const patchNoteUpdates = sqliteTable(
 );
 
 /**
+ * Teaser updates detected from news posts with "teasers" in the title
+ * Tracks when GGG adds new teaser content to existing teaser posts
+ */
+export const teaserUpdates = sqliteTable(
+  "teaser_updates",
+  {
+    id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
+    // Foreign key to the parent news item (teaser post)
+    newsItemId: integer("news_item_id", { mode: "number" })
+      .notNull()
+      .references(() => newsItems.id, { onDelete: "cascade" }),
+    // Content hash of the teaser post at time of detection (for comparing changes)
+    contentHash: text("content_hash").notNull(),
+    // Word count at time of detection
+    wordCount: integer("word_count", { mode: "number" }).notNull(),
+    // The actual content text at this update
+    contentText: text("content_text").notNull(),
+    // When this update was first detected/scraped - stored as ISO string
+    scrapedAt: text("scraped_at")
+      .notNull()
+      .$default(() => new Date().toISOString()),
+    // When this record was last updated - stored as ISO string
+    updatedAt: text("updated_at")
+      .notNull()
+      .$default(() => new Date().toISOString()),
+  },
+  (table) => [
+    // Ensure unique combination of news item and content hash
+    uniqueIndex("teaser_update_unique_idx").on(table.newsItemId, table.contentHash),
+    // Index for finding updates by news item
+    index("teaser_update_news_item_idx").on(table.newsItemId),
+    // Index for sorting by date
+    index("teaser_update_date_idx").on(table.scrapedAt),
+  ]
+);
+
+/**
  * Define relations between tables
  */
 export const newsItemsRelations = relations(newsItems, ({ many }) => ({
   patchUpdates: many(patchNoteUpdates),
+  teaserUpdates: many(teaserUpdates),
 }));
 
 export const patchNoteUpdatesRelations = relations(patchNoteUpdates, ({ one }) => ({
   newsItem: one(newsItems, {
     fields: [patchNoteUpdates.newsItemId],
+    references: [newsItems.id],
+  }),
+}));
+
+export const teaserUpdatesRelations = relations(teaserUpdates, ({ one }) => ({
+  newsItem: one(newsItems, {
+    fields: [teaserUpdates.newsItemId],
     references: [newsItems.id],
   }),
 }));
@@ -158,5 +209,7 @@ export type SystemState = typeof systemState.$inferSelect;
 export type NewSystemState = typeof systemState.$inferInsert;
 export type PatchNoteUpdate = typeof patchNoteUpdates.$inferSelect;
 export type NewPatchNoteUpdate = typeof patchNoteUpdates.$inferInsert;
+export type TeaserUpdate = typeof teaserUpdates.$inferSelect;
+export type NewTeaserUpdate = typeof teaserUpdates.$inferInsert;
 export type TwitchToken = typeof twitchTokens.$inferSelect;
 export type NewTwitchToken = typeof twitchTokens.$inferInsert;

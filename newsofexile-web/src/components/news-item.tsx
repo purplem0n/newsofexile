@@ -22,6 +22,7 @@ function isContentUpdatePatch(item: NewsItem): boolean {
 }
 
 const NEW_ITEM_THRESHOLD_HOURS = 24;
+const UPDATED_ITEM_THRESHOLD_HOURS = 24;
 
 function isNewItem(item: NewsItem): boolean {
   if (!item.postedAt) return false;
@@ -30,6 +31,39 @@ function isNewItem(item: NewsItem): boolean {
   const diffMs = now.getTime() - postedDate.getTime();
   const diffHours = diffMs / (1000 * 60 * 60);
   return diffHours <= NEW_ITEM_THRESHOLD_HOURS;
+}
+
+// Check if an item has been recently updated (teaser or patch update)
+// If the item is marked as read, we consider the user has "seen" the update
+function isRecentlyUpdated(item: NewsItem, isRead?: boolean): boolean {
+  // If user has read the item, they have acknowledged the update
+  if (isRead) return false;
+
+  const lastUpdated = new Date(item.lastUpdatedAt);
+  const postedAt = item.postedAt ? new Date(item.postedAt) : null;
+  const now = new Date();
+
+  // Only consider "updated" if the lastUpdated is significantly different from postedAt
+  // (more than 1 hour difference indicates an actual update vs initial creation)
+  if (postedAt) {
+    const updateDiff = Math.abs(lastUpdated.getTime() - postedAt.getTime());
+
+    // If lastUpdated is within 1 hour of postedAt, it's likely a new item, not an update
+    if (updateDiff < 60 * 60 * 1000) return false;
+
+    // Check if the update is recent (within threshold)
+    const timeSinceUpdate = now.getTime() - lastUpdated.getTime();
+    return timeSinceUpdate <= UPDATED_ITEM_THRESHOLD_HOURS * 60 * 60 * 1000;
+  }
+
+  return false;
+}
+
+// Check if item has any updates (patch or teaser)
+function hasUpdates(item: NewsItem): boolean {
+  const hasPatchUpdates = !!(item.patchUpdates && item.patchUpdates.length > 0);
+  const hasTeaserUpdates = !!(item.teaserUpdates && item.teaserUpdates.length > 0);
+  return hasPatchUpdates || hasTeaserUpdates;
 }
 
 function getCategoryBadgeColors(sourceType: SourceType) {
@@ -255,18 +289,20 @@ export function NewsItemCard({
     : null;
 
   const isNew = isNewItem(item) && !isRead;
+  const isUpdated = isRecentlyUpdated(item, isRead);
   const isContentUpdate = isContentUpdatePatch(item);
+  const itemHasUpdates = hasUpdates(item);
 
-  // Use patch updates from the item (included in main API response)
+  // Use updates from the item (included in main API response)
   const patchUpdates = item.patchUpdates ?? [];
-  const [showUpdates, setShowUpdates] = useState(true); // Expanded by default
+  const [showPatchUpdates, setShowPatchUpdates] = useState(true); // Expanded by default
 
   // State for modal
   const [selectedUpdate, setSelectedUpdate] = useState<PatchNoteUpdate | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   // Check if there are any unread patch updates
-  const hasUnreadUpdates = patchUpdates.some(
+  const hasUnreadPatchUpdates = patchUpdates.some(
     (update) => !readPatchUpdateIds?.has(String(update.id))
   );
 
@@ -298,7 +334,7 @@ export function NewsItemCard({
       >
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
-            {/* Row 1: Category + NEW Badge + Date */}
+            {/* Row 1: Category + NEW/UPDATED Badge + Date */}
             <div className="flex items-center gap-2 mb-1.5">
               <Badge
                 variant="outline"
@@ -312,6 +348,15 @@ export function NewsItemCard({
                   className="text-[10px] px-1.5 py-0 h-4 shrink-0 bg-rose-500 hover:bg-rose-500 text-white font-semibold"
                 >
                   NEW
+                </Badge>
+              )}
+              {/* Show UPDATED badge for items with recent teaser/patch updates */}
+              {isUpdated && itemHasUpdates && (
+                <Badge
+                  variant="default"
+                  className="text-[10px] px-1.5 py-0 h-4 shrink-0 bg-amber-500 hover:bg-amber-500 text-white font-semibold"
+                >
+                  UPDATED
                 </Badge>
               )}
               {formattedDateTime && (
@@ -352,11 +397,11 @@ export function NewsItemCard({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              setShowUpdates(!showUpdates);
+              setShowPatchUpdates(!showPatchUpdates);
             }}
             className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-300 transition-colors"
           >
-            {showUpdates ? (
+            {showPatchUpdates ? (
               <ChevronDown className="h-3.5 w-3.5" />
             ) : (
               <ChevronRight className="h-3.5 w-3.5" />
@@ -365,7 +410,7 @@ export function NewsItemCard({
               {patchUpdates.length} update{patchUpdates.length > 1 ? "s" : ""}
             </span>
             {/* Show NEW indicator for unread updates - RED color */}
-            {hasUnreadUpdates && (
+            {hasUnreadPatchUpdates && (
               <Badge
                 variant="default"
                 className="text-[9px] px-1 py-0 h-3 shrink-0 bg-rose-500 hover:bg-rose-500 text-white font-semibold"
@@ -376,7 +421,7 @@ export function NewsItemCard({
           </button>
 
           {/* Collapsible updates section - expanded by default */}
-          {showUpdates && (
+          {showPatchUpdates && (
             <div className="mt-2 space-y-1.5">
               {patchUpdates.map((update) => (
                 <PatchUpdateItem

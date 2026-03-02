@@ -43,7 +43,6 @@ export function NewsApp() {
   } = useReadItems();
 
   // Extract all patch update IDs from items for "Mark all as read" functionality
-  // Patch updates are now included in the main API response
   const allPatchUpdateIds = useMemo(() => {
     const updateIds: number[] = [];
     for (const item of items) {

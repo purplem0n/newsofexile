@@ -2,7 +2,7 @@ import { Num, OpenAPIRoute, Str } from "chanfana";
 import { eq, and, desc } from "drizzle-orm";
 import { z } from "zod";
 import { createDb, kvCache } from "../db";
-import { newsItems, patchNoteUpdates } from "../db/schema";
+import { newsItems, patchNoteUpdates, teaserUpdates } from "../db/schema";
 import { type AppContext, SourceType } from "../types";
 
 const MAX_ITEMS = 300;
@@ -52,6 +52,7 @@ export class NewsFetch extends OpenAPIRoute {
                     scrapedAt: z.string(),
                     contentFetchedAt: z.string().nullable(),
                     isActive: z.boolean(),
+                    lastUpdatedAt: z.string(),
                     patchUpdates: z.array(
                       z.object({
                         id: z.number(),
@@ -59,6 +60,15 @@ export class NewsFetch extends OpenAPIRoute {
                         contentHtml: z.string(),
                         contentText: z.string(),
                         isPoe1Format: z.boolean(),
+                        scrapedAt: z.string(),
+                      })
+                    ).optional(),
+                    teaserUpdates: z.array(
+                      z.object({
+                        id: z.number(),
+                        contentHash: z.string(),
+                        wordCount: z.number(),
+                        contentText: z.string(),
                         scrapedAt: z.string(),
                       })
                     ).optional(),
@@ -100,12 +110,20 @@ export class NewsFetch extends OpenAPIRoute {
             scrapedAt: string;
             contentFetchedAt: string | null;
             isActive: boolean;
+            lastUpdatedAt: string;
             patchUpdates?: Array<{
               id: number;
               updateDate: string;
               contentHtml: string;
               contentText: string;
               isPoe1Format: boolean;
+              scrapedAt: string;
+            }>;
+            teaserUpdates?: Array<{
+              id: number;
+              contentHash: string;
+              wordCount: number;
+              contentText: string;
               scrapedAt: string;
             }>;
           }>;
@@ -127,14 +145,18 @@ export class NewsFetch extends OpenAPIRoute {
         conditions.push(eq(newsItems.sourceType, sourceType));
       }
 
-      // Fetch up to MAX_ITEMS items with their patch updates
+      // Fetch up to MAX_ITEMS items with their updates
+      // Sort by lastUpdatedAt to surface newly updated items (teaser/patch updates)
       const items = await db.query.newsItems.findMany({
         where: and(...conditions),
-        orderBy: [desc(newsItems.postedAt), desc(newsItems.id)],
+        orderBy: [desc(newsItems.lastUpdatedAt), desc(newsItems.id)],
         limit: MAX_ITEMS,
         with: {
           patchUpdates: {
             orderBy: [desc(patchNoteUpdates.updateDate)],
+          },
+          teaserUpdates: {
+            orderBy: [desc(teaserUpdates.scrapedAt)],
           },
         },
       });
@@ -153,6 +175,7 @@ export class NewsFetch extends OpenAPIRoute {
         scrapedAt: item.scrapedAt,
         contentFetchedAt: item.contentFetchedAt || null,
         isActive: item.isActive,
+        lastUpdatedAt: item.lastUpdatedAt || item.scrapedAt,
         // Include patch updates if they exist (only for Content Update patches)
         patchUpdates: item.patchUpdates?.length > 0
           ? item.patchUpdates.map((update) => ({
@@ -161,6 +184,16 @@ export class NewsFetch extends OpenAPIRoute {
               contentHtml: update.contentHtml,
               contentText: update.contentText,
               isPoe1Format: update.isPoe1Format,
+              scrapedAt: update.scrapedAt,
+            }))
+          : undefined,
+        // Include teaser updates if they exist
+        teaserUpdates: item.teaserUpdates?.length > 0
+          ? item.teaserUpdates.map((update) => ({
+              id: update.id,
+              contentHash: update.contentHash,
+              wordCount: update.wordCount,
+              contentText: update.contentText,
               scrapedAt: update.scrapedAt,
             }))
           : undefined,

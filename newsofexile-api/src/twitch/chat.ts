@@ -1,6 +1,9 @@
 import type { Database } from "../db";
 import { forceRefreshAccessToken } from "./auth";
 
+// Set to true to disable all Twitch chat messages (prevents API flagging)
+const DISABLE_TWITCH_CHAT = true;
+
 const RATE_LIMIT_INTERVAL_MS = 1500; // 20 msg / 30 sec = 1 per 1500ms
 const RATE_LIMIT_MARGIN_MS = 15;
 
@@ -25,6 +28,12 @@ export async function sendChatMessage(
 ): Promise<{ success: boolean; latencyMs: number }> {
 	const { broadcasterId, message, accessToken, clientId, senderId, db, env, allowRetry = true } = options;
 	const startTime = Date.now();
+
+	// Skip sending if chat is disabled (prevents API flagging)
+	if (DISABLE_TWITCH_CHAT) {
+		console.warn(`[Twitch] Chat sending disabled. Would have sent to ${broadcasterId}: "${message}"`);
+		return { success: false, latencyMs: 0 };
+	}
 
 	try {
 		const response = await fetch("https://api.twitch.tv/helix/chat/messages", {

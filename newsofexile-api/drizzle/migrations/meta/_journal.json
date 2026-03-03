@@ -5,50 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1772320974714,
-      "tag": "0000_lowly_agent_brand",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1772349961594,
-      "tag": "0001_supreme_epoch",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1772362862593,
-      "tag": "0002_old_true_believers",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1772445821190,
-      "tag": "0003_slow_nightcrawler",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "6",
-      "when": 1772446366202,
-      "tag": "0004_charming_marvel_zombies",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "6",
-      "when": 1772491247291,
-      "tag": "0005_superb_mentor",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "6",
-      "when": 1772494160860,
-      "tag": "0006_serious_sunspot",
+      "when": 1772508224132,
+      "tag": "0000_living_songbird",
       "breakpoints": true
     }
   ]

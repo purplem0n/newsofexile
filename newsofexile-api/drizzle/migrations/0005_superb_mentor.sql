@@ -1,1 +1,0 @@
-DROP TABLE `twitch_tokens`;

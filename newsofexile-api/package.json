@@ -10,7 +10,8 @@
 		"cf-typegen": "wrangler types",
 		"db:migrate": "wrangler d1 migrations apply newsofexile-db --remote",
 		"db:migrate:local": "wrangler d1 migrations apply newsofexile-db --local",
-		"db:generate": "drizzle-kit generate"
+		"db:generate": "drizzle-kit generate",
+		"fetch-titles": "tsx scripts/fetch-news-titles.ts"
 	},
 	"dependencies": {
 		"chanfana": "^2.6.3",
@@ -23,6 +24,7 @@
 		"@types/node": "^22.13.0",
 		"@types/service-worker-mock": "^2.0.4",
 		"drizzle-kit": "^0.31.9",
+		"tsx": "^4.21.0",
 		"typescript": "^5.9.3",
 		"wrangler": "^4.69.0"
 	}

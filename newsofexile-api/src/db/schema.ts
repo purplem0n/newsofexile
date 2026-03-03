@@ -11,6 +11,36 @@ const dateToIsoString = (date: Date | string | null | undefined): string | null 
 };
 
 /**
+ * Content tags for news items (stored as JSON array)
+ */
+export const ContentTags = [
+  "teaser",
+  "twitch-drops",
+  "launch",
+  "competition",
+  "sale",
+  "concept-art",
+  "interview",
+  "build-showcase",
+  "faq",
+  "patch-update",
+  "event",
+  "merchandise",
+  "community",
+  "development",
+  "announcement",
+  "maintenance",
+  "content-update",
+  "rewards",
+  "soundtrack",
+  "recap",
+  "livestream",
+  "other",
+] as const;
+
+export type ContentTag = (typeof ContentTags)[number];
+
+/**
  * News items scraped from Path of Exile websites
  * Combines POE1/POE2 news and patch notes
  */
@@ -32,6 +62,10 @@ export const newsItems = sqliteTable(
     preview: text("preview"),
     // Total word count of the full article
     wordCount: integer("word_count"),
+    // Content tags (JSON array of tags like ["teaser", "twitch-drops"])
+    tags: text("tags").$default(() => "[]"),
+    // Primary tag (highest priority tag for filtering)
+    primaryTag: text("primary_tag"),
     // When the item was posted (from source) - stored as ISO string
     postedAt: text("posted_at").$type<Date | string | null>(),
     // When we scraped this item - stored as ISO string
@@ -56,6 +90,8 @@ export const newsItems = sqliteTable(
     uniqueIndex("source_unique_idx").on(table.sourceId, table.sourceType),
     // Index for filtering by source type
     index("source_type_idx").on(table.sourceType),
+    // Index for filtering by primary tag
+    index("primary_tag_idx").on(table.primaryTag),
     // Index for sorting by posted date
     index("posted_at_idx").on(table.postedAt),
     // Index for sorting by last update (for surfacing updated items)

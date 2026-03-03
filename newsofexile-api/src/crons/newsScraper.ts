@@ -2,6 +2,7 @@ import * as cheerio from "cheerio";
 import { eq, sql, and } from "drizzle-orm";
 import { Database, kvCache } from "../db";
 import { newsItems, systemState, patchNoteUpdates, teaserUpdates } from "../db/schema";
+import { classifyNews } from "../lib/news-tagger";
 
 // Forum sources to scrape
 const SOURCES = [
@@ -910,13 +911,14 @@ async function checkExistingTeasersForUpdates(
 }
 
 /**
- * Invalidate news list cache for specific source types
- * Always invalidates the "all" cache, plus caches for source types that had new items
+ * Invalidate news list cache for specific source types and tags
+ * Always invalidates the "all" cache, plus caches for source types and tags that had new items
  * Also invalidates when patch updates or teaser updates are found (since they're included in the main response)
  */
 async function invalidateNewsCache(
 	kv: KVNamespace,
 	sourceTypesWithNewItems: Set<string>,
+	tagsWithNewItems: Set<string>,
 	updatesFound: { patch: boolean; teaser: boolean } = { patch: false, teaser: false },
 ): Promise<void> {
 	const keysToDelete: string[] = [];
@@ -929,11 +931,21 @@ async function invalidateNewsCache(
 		keysToDelete.push(`news:list:source:${sourceType}`);
 	}
 
+	// Invalidate caches for specific tags that had new items
+	for (const tag of tagsWithNewItems) {
+		keysToDelete.push(`news:list:tag:${tag}`);
+		// Also invalidate combined source+tag caches
+		for (const sourceType of sourceTypesWithNewItems) {
+			keysToDelete.push(`news:list:source:${sourceType}:tag:${tag}`);
+		}
+	}
+
 	// Delete all collected keys using KV
 	await kvCache.deleteMany(kv, keysToDelete);
 
 	console.log(`[${JOB_NAME}] Cache invalidated: ${keysToDelete.length} keys deleted`, {
 		sourceTypes: Array.from(sourceTypesWithNewItems),
+		tags: Array.from(tagsWithNewItems),
 		updatesFound,
 	});
 }
@@ -970,6 +982,8 @@ export async function runNewsScraper(
 
 	// Track which source types had new items (for targeted cache invalidation)
 	const sourceTypesWithNewItems = new Set<string>();
+	// Track which tags had new items (for tag-specific cache invalidation)
+	const tagsWithNewItems = new Set<string>();
 	// Track if patch or teaser updates were found (to invalidate cache since updates are in main response)
 	const updatesFound = { patch: false, teaser: false };
 
@@ -1033,7 +1047,15 @@ export async function runNewsScraper(
 				teaserContent = { text, wordCount, hash };
 			}
 
-// Insert with all data including preview and word count
+			// Classify the news item by content type
+			const classification = classifyNews(item.title);
+
+			// Track tags for cache invalidation
+			for (const tag of classification.tags) {
+				tagsWithNewItems.add(tag);
+			}
+
+// Insert with all data including preview, word count, and tags
 			const now = new Date().toISOString();
 			await db.insert(newsItems).values({
 				sourceId: item.sourceId,
@@ -1041,6 +1063,8 @@ export async function runNewsScraper(
 				title: item.title,
 				url: item.url,
 				author: item.author,
+				tags: JSON.stringify(classification.tags),
+				primaryTag: classification.primaryTag,
 				postedAt: item.postedAt?.toISOString() || null,
 				scrapedAt: now,
 				preview: content?.preview || null,
@@ -1051,7 +1075,7 @@ export async function runNewsScraper(
 			});
 
 				totalNew++;
-				console.log(`[${JOB_NAME}] Inserted: ${item.title} (${content?.wordCount || 0} words)`);
+				console.log(`[${JOB_NAME}] Inserted: ${item.title} [${classification.primaryTag}] (${content?.wordCount || 0} words)`);
 
 
 // Store any patch updates that were found for this new item
@@ -1141,7 +1165,7 @@ export async function runNewsScraper(
 		// Invalidate cache if new items were added or any updates were found
 		// (updates are included in main response, so we need to invalidate)
 		if (kv && (totalNew > 0 || updatesFound.patch || updatesFound.teaser)) {
-			await invalidateNewsCache(kv, sourceTypesWithNewItems, updatesFound);
+			await invalidateNewsCache(kv, sourceTypesWithNewItems, tagsWithNewItems, updatesFound);
 		}
 	} catch (error) {
 		jobError = error instanceof Error ? error : new Error(String(error));

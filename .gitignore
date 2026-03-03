@@ -5,3 +5,6 @@ dev.sh
 lighthouse/
 .env.local
 .env
+newsofexile-api/news-titles.txt
+newsofexile-api/news-titles-tagged.json
+newsofexile-api/docs/NEWS_TAGGING.md

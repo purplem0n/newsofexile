@@ -1,8 +1,13 @@
 import { DateTime, Str } from "chanfana";
 import type { Context } from "hono";
 import { z } from "zod";
+import { ContentTags } from "./db/schema";
 
 export type AppContext = Context<{ Bindings: Env }>;
+
+// Re-export content tags for API use
+export const ContentTag = z.enum(ContentTags as unknown as [string, ...string[]]);
+export type ContentTagType = z.infer<typeof ContentTag>;
 
 export const Task = z.object({
   name: Str({ example: "lorem" }),

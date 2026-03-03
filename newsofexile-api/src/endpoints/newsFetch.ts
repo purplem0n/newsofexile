@@ -1,32 +1,39 @@
 import { Num, OpenAPIRoute, Str } from "chanfana";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { z } from "zod";
 import { createDb, kvCache } from "../db";
-import { newsItems, patchNoteUpdates, teaserUpdates } from "../db/schema";
+import { newsItems, patchNoteUpdates, teaserUpdates, ContentTags } from "../db/schema";
 import { type AppContext, SourceType } from "../types";
 
 const MAX_ITEMS = 300;
 const CACHE_KEY_PREFIX = "news:list";
 
 /**
- * Generate a cache key based on source type filter
+ * Generate a cache key based on source type and tag filters
  */
-function generateCacheKey(sourceType: string | undefined): string {
+function generateCacheKey(sourceType: string | undefined, tag: string | undefined): string {
+  const parts: string[] = [CACHE_KEY_PREFIX];
   if (sourceType) {
-    return `${CACHE_KEY_PREFIX}:source:${sourceType}`;
+    parts.push(`source:${sourceType}`);
   }
-  return CACHE_KEY_PREFIX;
+  if (tag) {
+    parts.push(`tag:${tag}`);
+  }
+  return parts.join(":");
 }
 
 export class NewsFetch extends OpenAPIRoute {
   schema = {
     tags: ["News"],
     summary: "List News Items",
-    description: `Fetch up to ${MAX_ITEMS} recent news items. Optionally filter by source type. Includes patch note updates as sub-items for Content Update patches.`,
+    description: `Fetch up to ${MAX_ITEMS} recent news items. Optionally filter by source type or content tag. Includes patch note updates as sub-items for Content Update patches.`,
     request: {
       query: z.object({
         sourceType: SourceType.optional().describe(
           "Filter by source type (poe1-news, poe1-patch, poe2-news, poe2-patch)",
+        ),
+        tag: z.enum(ContentTags as unknown as [string, ...string[]]).optional().describe(
+          "Filter by content tag (teaser, twitch-drops, merchandise, etc.)",
         ),
       }),
     },
@@ -48,6 +55,8 @@ export class NewsFetch extends OpenAPIRoute {
                     author: z.string().nullable(),
                     preview: z.string().nullable(),
                     wordCount: z.number().nullable(),
+                    tags: z.array(z.string()),
+                    primaryTag: z.string().nullable(),
                     postedAt: z.string().nullable(),
                     scrapedAt: z.string(),
                     contentFetchedAt: z.string().nullable(),
@@ -88,10 +97,10 @@ export class NewsFetch extends OpenAPIRoute {
       const data = await this.getValidatedData<typeof this.schema>();
 
       // Retrieve the validated parameters
-      const { sourceType } = data.query;
+      const { sourceType, tag } = data.query;
 
-      // Generate cache key (simple - no cursor)
-      const cacheKey = generateCacheKey(sourceType);
+      // Generate cache key based on filters
+      const cacheKey = generateCacheKey(sourceType, tag);
 
       // Try to get cached response from KV
       const cached = await kvCache.get<{
@@ -106,6 +115,8 @@ export class NewsFetch extends OpenAPIRoute {
             author: string | null;
             preview: string | null;
             wordCount: number | null;
+            tags: string[];
+            primaryTag: string | null;
             postedAt: string | null;
             scrapedAt: string;
             contentFetchedAt: string | null;
@@ -145,6 +156,13 @@ export class NewsFetch extends OpenAPIRoute {
         conditions.push(eq(newsItems.sourceType, sourceType));
       }
 
+      // Filter by tag - check if tag is in the JSON array or matches primaryTag
+      if (tag) {
+        conditions.push(
+          sql`${newsItems.tags} LIKE ${`%"${tag}"%`} OR ${newsItems.primaryTag} = ${tag}`
+        );
+      }
+
       // Fetch up to MAX_ITEMS items with their updates
       // Sort by lastUpdatedAt to surface newly updated items (teaser/patch updates)
       const items = await db.query.newsItems.findMany({
@@ -171,6 +189,9 @@ export class NewsFetch extends OpenAPIRoute {
         author: item.author,
         preview: item.preview,
         wordCount: item.wordCount,
+        // Parse tags from JSON string
+        tags: item.tags ? JSON.parse(item.tags) as string[] : [],
+        primaryTag: item.primaryTag || null,
         postedAt: item.postedAt || null,
         scrapedAt: item.scrapedAt,
         contentFetchedAt: item.contentFetchedAt || null,

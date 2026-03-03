@@ -164,10 +164,10 @@ export class NewsFetch extends OpenAPIRoute {
       }
 
       // Fetch up to MAX_ITEMS items with their updates
-      // Sort by lastUpdatedAt to surface newly updated items (teaser/patch updates)
+      // Sort by postedAt to show newest news items first (by original post date)
       const items = await db.query.newsItems.findMany({
         where: and(...conditions),
-        orderBy: [desc(newsItems.lastUpdatedAt), desc(newsItems.id)],
+        orderBy: [desc(newsItems.postedAt), desc(newsItems.id)],
         limit: MAX_ITEMS,
         with: {
           patchUpdates: {

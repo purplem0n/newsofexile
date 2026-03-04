@@ -5,6 +5,7 @@ import { NewsList, NewsListSkeleton } from "@/components/news-list";
 import { useNews } from "@/hooks/use-news";
 import { useReadItems } from "@/hooks/use-read-items";
 import type { NewsCategory, SourceType } from "@/types/news";
+import { isNewItem, isRecentlyUpdated } from "@/lib/news-flags";
 
 const validFilters: NewsCategory[] = [
   "all",
@@ -45,6 +46,32 @@ export function NewsApp() {
     hasUnreadPatchUpdates,
     hasUnacknowledgedTeaserUpdates,
   } = useReadItems();
+
+  // Always prioritize NEW or UPDATED items at the top, independent of backend ordering
+  const sortedItems = useMemo(() => {
+    if (!items.length) return items;
+
+    const prioritized: typeof items = [];
+    const rest: typeof items = [];
+
+    for (const item of items) {
+      const isRead = readIds?.has(String(item.id)) ?? false;
+      const isNew = isNewItem(item) && !isRead;
+      const isUpdated = isRecentlyUpdated(item, isRead, acknowledgedTeaserIds);
+      const hasUnreadPatchUpdates =
+        item.patchUpdates?.some(
+          (u) => !readPatchUpdateIds?.has(String(u.id))
+        ) ?? false;
+
+      if (isNew || isUpdated || hasUnreadPatchUpdates) {
+        prioritized.push(item);
+      } else {
+        rest.push(item);
+      }
+    }
+
+    return [...prioritized, ...rest];
+  }, [items, readIds, readPatchUpdateIds, acknowledgedTeaserIds]);
 
   // Extract all patch update IDs from items for "Mark all as read" functionality
   const allPatchUpdateIds = useMemo(() => {
@@ -123,7 +150,7 @@ export function NewsApp() {
           <NewsListSkeleton />
         ) : (
           <NewsList
-            items={items}
+            items={sortedItems}
             loading={loading}
             error={error}
             onRetry={refresh}

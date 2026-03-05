@@ -1,5 +1,6 @@
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Button } from "@/components/ui/button";
+import { Settings } from "lucide-react";
 import { type NewsCategory, categoryLabels, type SourceType } from "@/types/news";
 
 interface NewsFilterProps {
@@ -7,6 +8,7 @@ interface NewsFilterProps {
   onChange: (value: NewsCategory) => void;
   onMarkAllRead?: () => void;
   hasUnread?: boolean;
+  onSettingsClick?: () => void;
 }
 
 const filters: NewsCategory[] = [
@@ -45,7 +47,7 @@ function getCategoryColorClasses(sourceType: SourceType): {
   }
 }
 
-export function NewsFilter({ value, onChange, onMarkAllRead, hasUnread }: NewsFilterProps) {
+export function NewsFilter({ value, onChange, onMarkAllRead, hasUnread, onSettingsClick }: NewsFilterProps) {
   return (
     <div className="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur border-b border-zinc-800/50">
       <div className="max-w-3xl mx-auto px-4 py-3">
@@ -68,34 +70,49 @@ export function NewsFilter({ value, onChange, onMarkAllRead, hasUnread }: NewsFi
             )}
           </div>
 
-          {/* Filter Toggle Group */}
-          <ToggleGroup
-            type="single"
-            value={value}
-            onValueChange={(v) => v && onChange(v as NewsCategory)}
-            size="sm"
-            variant="outline"
-          >
-            {filters.map((filter) => {
-              const colorClasses = filter !== "all" ? getCategoryColorClasses(filter as SourceType) : null;
-              return (
-                <ToggleGroupItem
-                  key={filter}
-                  value={filter}
-                  className={`text-xs data-[state=on]:bg-zinc-800 data-[state=on]:text-zinc-100 gap-1.5 ${
-                    colorClasses?.active ?? ""
-                  }`}
-                >
-                  {colorClasses && (
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full ${colorClasses.dot} group-data-[state=on]/toggle:hidden`}
-                    />
-                  )}
-                  {categoryLabels[filter]}
-                </ToggleGroupItem>
-              );
-            })}
-          </ToggleGroup>
+          {/* Filter Toggle Group + Settings */}
+          <div className="flex items-center gap-2">
+            <ToggleGroup
+              type="single"
+              value={value}
+              onValueChange={(v) => v && onChange(v as NewsCategory)}
+              size="sm"
+              variant="outline"
+            >
+              {filters.map((filter) => {
+                const colorClasses = filter !== "all" ? getCategoryColorClasses(filter as SourceType) : null;
+                return (
+                  <ToggleGroupItem
+                    key={filter}
+                    value={filter}
+                    className={`text-xs data-[state=on]:bg-zinc-800 data-[state=on]:text-zinc-100 gap-1.5 ${
+                      colorClasses?.active ?? ""
+                    }`}
+                  >
+                    {colorClasses && (
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${colorClasses.dot} group-data-[state=on]/toggle:hidden`}
+                      />
+                    )}
+                    {categoryLabels[filter]}
+                  </ToggleGroupItem>
+                );
+              })}
+            </ToggleGroup>
+            
+            {/* Settings Button */}
+            {onSettingsClick && (
+              <Button
+                onClick={onSettingsClick}
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+                title="Settings"
+              >
+                <Settings className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </div>

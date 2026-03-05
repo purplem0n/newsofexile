@@ -1,10 +1,11 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { NewsItem, SourceType, PatchNoteUpdate } from "@/types/news";
-import { categoryLabels } from "@/types/news";
+import { categoryLabels, tagLabels } from "@/types/news";
 import { isNewItem, isRecentlyUpdated } from "@/lib/news-flags";
 import { ExternalLink, ChevronDown, ChevronRight, FileText, X } from "lucide-react";
 import { useCallback, useState } from "react";
+import { useSettings } from "@/contexts/settings-context";
 
 interface NewsItemProps {
   item: NewsItem;
@@ -241,6 +242,7 @@ export function NewsItemCard({
   onPatchUpdateClick,
   onTeaserUpdateAcknowledge,
 }: NewsItemProps) {
+  const { showTagsInItems } = useSettings();
   const formattedDateTime = item.postedAt
     ? new Intl.DateTimeFormat("en-US", {
         month: "short",
@@ -383,6 +385,21 @@ export function NewsItemCard({
                   <span className="text-zinc-400"> · {item.wordCount} words</span>
                 )}
               </p>
+            )}
+
+            {/* Tags */}
+            {showTagsInItems && item.tags && item.tags.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {item.tags.map((tag) => (
+                  <Badge
+                    key={tag}
+                    variant="outline"
+                    className="text-[9px] px-1.5 py-0 h-3 border-zinc-600 bg-zinc-800/50 text-zinc-400"
+                  >
+                    {tagLabels[tag]}
+                  </Badge>
+                ))}
+              </div>
             )}
           </div>
 

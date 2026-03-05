@@ -31,6 +31,7 @@ export type ContentTag =
 	| "cosmetics" // Supporter packs, cosmetics, microtransactions
 	| "stash-tab-sale" // Stash tab sales
 	| "hotfix" // Hotfixes
+	| "restart-fix" // Restart fixes
 	| "other";
 
 export interface TagResult {
@@ -326,6 +327,26 @@ const TAG_PATTERNS: Record<ContentTag, RegExp[]> = {
 		/hotfix/i,
 		/\d+\.\d+\.\d+ hotfix/i,
 		/\d+\.\d+ hotfix/i,
+		/\d+\.\d+[a-z] restart fix/i,
+		/\d+\.\d+[a-z] crash fix/i,
+		/\d+\.\d+[a-z] stability fix/i,
+		/\d+\.\d+[a-z] fix/i,
+		/restart fix/i,
+		/crash fix/i,
+		/stability fix/i,
+		/emergency fix/i,
+		/critical fix/i,
+		/server restart/i,
+		/unplanned restart/i,
+	],
+
+	"restart-fix": [
+		/\d+\.\d+[a-z] restart fix/i,
+		/restart fix/i,
+		/server restart/i,
+		/unplanned restart/i,
+		/restart required/i,
+		/forced restart/i,
 	],
 
 	other: [],
@@ -338,6 +359,7 @@ const TAG_PATTERNS: Record<ContentTag, RegExp[]> = {
 const TAG_PRIORITY: ContentTag[] = [
 	"maintenance", // Server issues are highest priority
 	"hotfix", // Hotfixes are high priority
+	"restart-fix", // Restart fixes are high priority
 	"timeline", // Expansion timelines
 	"league-end", // League ending info is important
 	"patch-update",
@@ -452,6 +474,7 @@ export function getClassificationStats(results: TagResult[]) {
 		cosmetics: 0,
 		"stash-tab-sale": 0,
 		hotfix: 0,
+		"restart-fix": 0,
 		other: 0,
 	};
 

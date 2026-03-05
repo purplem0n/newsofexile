@@ -2,8 +2,10 @@ import { useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { NewsFilter } from "@/components/news-filter";
 import { NewsList, NewsListSkeleton } from "@/components/news-list";
+import { SettingsModal } from "@/components/settings-modal";
 import { useNews } from "@/hooks/use-news";
 import { useReadItems } from "@/hooks/use-read-items";
+import { useSettings } from "@/contexts/settings-context";
 import type { NewsCategory, SourceType } from "@/types/news";
 
 const validFilters: NewsCategory[] = [
@@ -17,6 +19,7 @@ const validFilters: NewsCategory[] = [
 export function NewsApp() {
   const { filter: urlFilter } = useParams<{ filter?: string }>();
   const navigate = useNavigate();
+  const { isTagVisible, openSettings, closeSettings, isSettingsOpen } = useSettings();
 
   // Validate and normalize the filter from URL
   const filter: NewsCategory = useMemo(() => {
@@ -47,15 +50,28 @@ export function NewsApp() {
   } = useReadItems();
 
   // Sort by lastUpdatedAt so recently updated items stay at top regardless of read status
+  // Also filter by tags based on settings
   const sortedItems = useMemo(() => {
     if (!items.length) return items;
 
-    return [...items].sort((a, b) => {
+    let filteredItems = [...items];
+    
+    // Filter items based on tag visibility settings
+    filteredItems = filteredItems.filter(item => {
+      // Check if any of the item's tags are visible
+      if (item.tags && item.tags.length > 0) {
+        return item.tags.some(tag => isTagVisible(tag));
+      }
+      // If no tags, show the item (or check primary tag)
+      return item.primaryTag ? isTagVisible(item.primaryTag) : true;
+    });
+
+    return filteredItems.sort((a, b) => {
       const aTime = new Date(a.lastUpdatedAt).getTime();
       const bTime = new Date(b.lastUpdatedAt).getTime();
       return bTime - aTime; // newest first
     });
-  }, [items]);
+  }, [items, isTagVisible]);
 
   // Extract all patch update IDs from items for "Mark all as read" functionality
   const allPatchUpdateIds = useMemo(() => {
@@ -127,6 +143,7 @@ export function NewsApp() {
         onChange={handleFilterChange}
         onMarkAllRead={handleMarkAllRead}
         hasUnread={hasAnyUnread}
+        onSettingsClick={openSettings}
       />
 
       <main className="max-w-3xl mx-auto px-4 py-4">
@@ -152,6 +169,9 @@ export function NewsApp() {
           <p>Not affiliated with Grinding Gear Games.</p>
         </footer>
       </main>
+
+      {/* Settings Modal */}
+      <SettingsModal isOpen={isSettingsOpen} onClose={closeSettings} />
     </div>
   );
 }

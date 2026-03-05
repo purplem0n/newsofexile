@@ -255,6 +255,26 @@ export function NewsItemCard({
     ? formatRelativeTime(new Date(item.postedAt))
     : null;
 
+  // Show updated datetime and "updated ago" when lastUpdatedAt differs from scrapedAt
+  // (i.e. we detected new content - patch/teaser updates - after the initial scrape)
+  const scrapedAtMs = new Date(item.scrapedAt).getTime();
+  const lastUpdatedMs = new Date(item.lastUpdatedAt).getTime();
+  const isUpdatedDifferent = Math.abs(lastUpdatedMs - scrapedAtMs) > 1000; // > 1 second
+
+  const formattedUpdatedDateTime = isUpdatedDifferent
+    ? new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      }).format(new Date(item.lastUpdatedAt))
+    : null;
+
+  const updatedRelativeTime = isUpdatedDifferent
+    ? formatRelativeTime(new Date(item.lastUpdatedAt))
+    : null;
+
   const isNew = isNewItem(item) && !isRead;
   const isUpdated = isRecentlyUpdated(item, isRead ?? false, acknowledgedTeaserIds);
   const isContentUpdate = isContentUpdatePatch(item);
@@ -338,6 +358,13 @@ export function NewsItemCard({
                   {formattedDateTime}
                   {relativeTime && (
                     <span className="text-zinc-500"> · {relativeTime}</span>
+                  )}
+                  {isUpdatedDifferent && (
+                    <span className="text-zinc-500">
+                      {" "}
+                      · Updated {updatedRelativeTime}
+                      {formattedUpdatedDateTime && ` (${formattedUpdatedDateTime})`}
+                    </span>
                   )}
                 </span>
               )}

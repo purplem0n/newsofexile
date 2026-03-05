@@ -5,7 +5,6 @@ import { NewsList, NewsListSkeleton } from "@/components/news-list";
 import { useNews } from "@/hooks/use-news";
 import { useReadItems } from "@/hooks/use-read-items";
 import type { NewsCategory, SourceType } from "@/types/news";
-import { isNewItem, isRecentlyUpdated } from "@/lib/news-flags";
 
 const validFilters: NewsCategory[] = [
   "all",
@@ -47,31 +46,16 @@ export function NewsApp() {
     hasUnacknowledgedTeaserUpdates,
   } = useReadItems();
 
-  // Always prioritize NEW or UPDATED items at the top, independent of backend ordering
+  // Sort by lastUpdatedAt so recently updated items stay at top regardless of read status
   const sortedItems = useMemo(() => {
     if (!items.length) return items;
 
-    const prioritized: typeof items = [];
-    const rest: typeof items = [];
-
-    for (const item of items) {
-      const isRead = readIds?.has(String(item.id)) ?? false;
-      const isNew = isNewItem(item) && !isRead;
-      const isUpdated = isRecentlyUpdated(item, isRead, acknowledgedTeaserIds);
-      const hasUnreadPatchUpdates =
-        item.patchUpdates?.some(
-          (u) => !readPatchUpdateIds?.has(String(u.id))
-        ) ?? false;
-
-      if (isNew || isUpdated || hasUnreadPatchUpdates) {
-        prioritized.push(item);
-      } else {
-        rest.push(item);
-      }
-    }
-
-    return [...prioritized, ...rest];
-  }, [items, readIds, readPatchUpdateIds, acknowledgedTeaserIds]);
+    return [...items].sort((a, b) => {
+      const aTime = new Date(a.lastUpdatedAt).getTime();
+      const bTime = new Date(b.lastUpdatedAt).getTime();
+      return bTime - aTime; // newest first
+    });
+  }, [items]);
 
   // Extract all patch update IDs from items for "Mark all as read" functionality
   const allPatchUpdateIds = useMemo(() => {

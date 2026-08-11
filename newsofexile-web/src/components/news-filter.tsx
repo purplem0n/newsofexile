@@ -1,6 +1,7 @@
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Button } from "@/components/ui/button";
 import { Settings } from "lucide-react";
+import { NzClock } from "@/components/nz-clock";
 import { type NewsCategory, categoryLabels, type SourceType } from "@/types/news";
 
 interface NewsFilterProps {
@@ -57,6 +58,8 @@ export function NewsFilter({ value, onChange, onMarkAllRead, hasUnread, onSettin
             <div className="flex items-center gap-2">
               <img src="/favicon.ico" alt="News of Exile" className="w-5 h-5" width="20" height="20" />
               <h1 className="text-sm font-semibold text-zinc-100">News of Exile</h1>
+              <span className="hidden sm:inline text-zinc-600">·</span>
+              <NzClock />
             </div>
             {hasUnread && onMarkAllRead && (
               <Button

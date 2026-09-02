@@ -1,5 +1,11 @@
 import { Database } from "../db";
-import { runNewsScraper } from "./newsScraper";
+import {
+	runNewsScraper,
+	ensureNewsDataFresh,
+	isNewsDataStale,
+	STALE_THRESHOLD_MS,
+	type NewsScraperResult,
+} from "./newsScraper";
 
 /**
  * Run the unified news scraper cron job
@@ -15,17 +21,13 @@ export async function runCronJobs(
 	poeCookie?: string,
 	env?: Env,
 ): Promise<{
-	newsScraper: {
-		success: boolean;
-		scraped: number;
-		newItems: number;
-		error?: string;
-	};
+	newsScraper: NewsScraperResult;
 }> {
 	console.log("[CronManager] Starting scheduled cron job");
 
-	// Run the unified news scraper
-	const newsScraper = await runNewsScraper(db, kv, poeCookie);
+	const newsScraper = await runNewsScraper(db, kv, poeCookie, {
+		includeUpdateChecks: true,
+	});
 
 	console.log("[CronManager] Completed cron job", {
 		newsScraper,
@@ -36,4 +38,9 @@ export async function runCronJobs(
 	};
 }
 
-export { runNewsScraper };
+export {
+	runNewsScraper,
+	ensureNewsDataFresh,
+	isNewsDataStale,
+	STALE_THRESHOLD_MS,
+};

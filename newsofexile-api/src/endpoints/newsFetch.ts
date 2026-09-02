@@ -3,6 +3,7 @@ import { eq, and, desc, sql } from "drizzle-orm";
 import { z } from "zod";
 import { createDb, kvCache } from "../db";
 import { newsItems, patchNoteUpdates, teaserUpdates, ContentTags } from "../db/schema";
+import { ensureNewsDataFresh } from "../crons";
 import { type AppContext, SourceType } from "../types";
 
 const MAX_ITEMS = 300;
@@ -26,7 +27,7 @@ export class NewsFetch extends OpenAPIRoute {
   schema = {
     tags: ["News"],
     summary: "List News Items",
-    description: `Fetch up to ${MAX_ITEMS} recent news items. Optionally filter by source type or content tag. Includes patch note updates as sub-items for Content Update patches.`,
+    description: `Fetch up to ${MAX_ITEMS} recent news items. Optionally filter by source type or content tag. Includes patch note updates as sub-items for Content Update patches. Refreshes stale scrape data (older than 1 minute) before responding.`,
     request: {
       query: z.object({
         sourceType: SourceType.optional().describe(
@@ -102,6 +103,11 @@ export class NewsFetch extends OpenAPIRoute {
       // Generate cache key based on filters
       const cacheKey = generateCacheKey(sourceType, tag);
 
+      const db = createDb(c.env.DB);
+
+      // Refresh scrape data when older than 1 minute, then serve fresh results
+      await ensureNewsDataFresh(db, c.env.CACHE, c.env.POE_COOKIE);
+
       // Try to get cached response from KV
       const cached = await kvCache.get<{
         success: boolean;
@@ -145,9 +151,6 @@ export class NewsFetch extends OpenAPIRoute {
         // Return cached data directly
         return cached;
       }
-
-      // Initialize database connection with D1
-      const db = createDb(c.env.DB);
 
       // Build the query conditions
       const conditions = [eq(newsItems.isActive, true)];

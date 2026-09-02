@@ -31,6 +31,27 @@ const SOURCES = [
 const JOB_NAME = "news-scraper";
 const PREVIEW_WORD_COUNT = 100;
 const REQUEST_DELAY_MS = 1000; // 1 second delay between content fetches
+/** Only run patch/teaser update checks every 15 minutes (on :00, :15, :30, :45) */
+const UPDATE_CHECK_INTERVAL_MINUTES = 15;
+/** API treats scrape data as stale after this age and triggers a refresh */
+export const STALE_THRESHOLD_MS = 60 * 1000;
+const SCRAPER_WAIT_TIMEOUT_MS = 90 * 1000;
+
+export interface NewsScraperResult {
+	success: boolean;
+	scraped: number;
+	newItems: number;
+	newPatchUpdates: number;
+	newTeaserUpdates: number;
+	/** True when another invocation already holds the scraper lock */
+	skipped?: boolean;
+	error?: string;
+}
+
+export interface RunNewsScraperOptions {
+	/** When omitted, patch/teaser checks run only on 15-minute clock boundaries */
+	includeUpdateChecks?: boolean;
+}
 
 /**
  * Extract text content from the MAIN/OP post only using Cheerio
@@ -117,7 +138,7 @@ function countWords(text: string): number {
 async function fetchContent(
 	url: string,
 	poeCookie?: string,
-): Promise<{ preview: string; wordCount: number; fullText: string } | null> {
+): Promise<{ preview: string; wordCount: number; fullText: string; html: string } | null> {
 	try {
 		const headers: Record<string, string> = {
 			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
@@ -142,7 +163,7 @@ async function fetchContent(
 		const preview = getFirstWords(text, PREVIEW_WORD_COUNT);
 		const wordCount = countWords(text);
 
-		return { preview, wordCount, fullText: text };
+		return { preview, wordCount, fullText: text, html };
 	} catch (error) {
 		console.error(`[${JOB_NAME}] Error fetching content from ${url}:`, error);
 		return null;
@@ -276,22 +297,18 @@ function parsePoeDate(dateText: string): Date | null {
 }
 
 /**
- * Check if item already exists in database
+ * Load all existing source IDs for a source type in one query (avoids per-item lookups)
  */
-async function itemExists(
+async function getExistingSourceIds(
 	db: Database,
-	sourceId: string,
 	sourceType: string,
-): Promise<boolean> {
+): Promise<Set<string>> {
 	const existing = await db
-		.select({ id: newsItems.id })
+		.select({ sourceId: newsItems.sourceId })
 		.from(newsItems)
-		.where(
-			sql`${newsItems.sourceId} = ${sourceId} AND ${newsItems.sourceType} = ${sourceType}`,
-		)
-		.limit(1);
+		.where(eq(newsItems.sourceType, sourceType));
 
-	return existing.length > 0;
+	return new Set(existing.map((row) => row.sourceId));
 }
 
 /**
@@ -757,8 +774,6 @@ async function checkExistingPatchNotesForUpdates(
 
 	for (const patchNote of contentUpdates) {
 		try {
-			console.log(`[${JOB_NAME}] Checking updates for: ${patchNote.title}`);
-
 			// Fetch the full HTML content
 			const headers: Record<string, string> = {
 				"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
@@ -795,8 +810,6 @@ async function checkExistingPatchNotesForUpdates(
 					updates,
 				);
 				totalUpdatesFound += count;
-			} else {
-				console.log(`[${JOB_NAME}] No updates found for ${patchNote.title}`);
 			}
 
 			// Delay between checks to be polite
@@ -854,8 +867,6 @@ async function checkExistingTeasersForUpdates(
 
 	for (const teaser of teaserPosts) {
 		try {
-			console.log(`[${JOB_NAME}] Checking updates for: ${teaser.title}`);
-
 			// Fetch the full HTML content
 			const headers: Record<string, string> = {
 				"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
@@ -893,8 +904,6 @@ async function checkExistingTeasersForUpdates(
 
 			if (isNewUpdate) {
 				totalUpdatesFound++;
-			} else {
-				console.log(`[${JOB_NAME}] No updates found for ${teaser.title}`);
 			}
 
 			// Delay between checks to be polite
@@ -958,20 +967,27 @@ export async function runNewsScraper(
 	db: Database,
 	kv?: KVNamespace,
 	poeCookie?: string,
-): Promise<{
-	success: boolean;
-	scraped: number;
-	newItems: number;
-	newPatchUpdates: number;
-	newTeaserUpdates: number;
-	error?: string;
-}> {
-	console.log(`[${JOB_NAME}] Starting news scraper job`);
+	options?: RunNewsScraperOptions,
+): Promise<NewsScraperResult> {
+	const shouldCheckUpdates =
+		options?.includeUpdateChecks ??
+		(new Date().getMinutes() % UPDATE_CHECK_INTERVAL_MINUTES === 0);
+
+	console.log(`[${JOB_NAME}] Starting news scraper job`, {
+		shouldCheckUpdates,
+	});
 
 	const hasLock = await acquireLock(db);
 	if (!hasLock) {
 		console.log(`[${JOB_NAME}] Job already running, skipping`);
-		return { success: true, scraped: 0, newItems: 0, newPatchUpdates: 0, newTeaserUpdates: 0 };
+		return {
+			success: true,
+			scraped: 0,
+			newItems: 0,
+			newPatchUpdates: 0,
+			newTeaserUpdates: 0,
+			skipped: true,
+		};
 	}
 
 	let totalScraped = 0;
@@ -988,59 +1004,46 @@ export async function runNewsScraper(
 	const updatesFound = { patch: false, teaser: false };
 
 	try {
-		// Process each source
-		for (const source of SOURCES) {
-			const items = await scrapeIndexPage(source, poeCookie);
+		// Scrape all index pages in parallel (4 HTTP fetches instead of sequential)
+		const scrapeResults = await Promise.all(
+			SOURCES.map((source) => scrapeIndexPage(source, poeCookie)),
+		);
+
+		for (let sourceIndex = 0; sourceIndex < SOURCES.length; sourceIndex++) {
+			const source = SOURCES[sourceIndex];
+			const items = scrapeResults[sourceIndex];
 			totalScraped += items.length;
 
 			// Track if this source had any new items
 			let sourceHadNewItems = false;
 
+			// Batch lookup: one DB query per source instead of per item
+			const existingSourceIds = await getExistingSourceIds(db, source.type);
+
 			// Process each item from this source
 			for (let i = 0; i < items.length; i++) {
 				const item = items[i];
 
-				// Check if item already exists
-				const exists = await itemExists(db, item.sourceId, source.type);
-				if (exists) {
-					continue; // Skip existing items
+				if (existingSourceIds.has(item.sourceId)) {
+					continue;
 				}
 
 				console.log(`[${JOB_NAME}] New item found: ${item.title}`);
 				sourceHadNewItems = true;
 
-				// Fetch content (preview + word count) for this item
-				console.log(`[${JOB_NAME}] Fetching content from ${item.url}`);
 				const content = await fetchContent(item.url, poeCookie);
 
-			// Check if this is a Content Update patch note and extract any updates
 			let patchUpdates: PatchUpdate[] = [];
 			let isTeaser = false;
 			let teaserContent: { text: string; wordCount: number; hash: string } | null = null;
 
-			if (isContentUpdatePatch(item.title, source.type)) {
-				console.log(`[${JOB_NAME}] Detected Content Update patch note, checking for updates`);
-				// Fetch the full HTML to check for updates
-				const headers: Record<string, string> = {
-					"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
-					Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-					"Accept-Language": "en-US,en;q=0.9",
-				};
-				if (poeCookie) {
-					headers["Cookie"] = poeCookie;
-				}
-				const response = await fetch(item.url, { headers });
-				if (response.ok) {
-					const html = await response.text();
-					patchUpdates = extractPatchUpdates(html);
-				}
+			if (isContentUpdatePatch(item.title, source.type) && content?.html) {
+				patchUpdates = extractPatchUpdates(content.html);
 			}
 
 			// Check if this is a Teaser post
 			if (isTeaserPost(item.title, source.type)) {
 				isTeaser = true;
-				console.log(`[${JOB_NAME}] Detected Teaser post, storing initial content`);
-				// Use the already fetched content
 				const text = content?.fullText || '';
 				const wordCount = content?.wordCount || 0;
 				const hash = generateContentHash(text);
@@ -1142,22 +1145,23 @@ export async function runNewsScraper(
 			}
 		}
 
-		// Check existing Content Update patch notes for updates
-		console.log(`[${JOB_NAME}] Checking existing Content Update patch notes for updates`);
-		const { count: existingPatchCount } =
-			await checkExistingPatchNotesForUpdates(db, poeCookie);
-		newPatchUpdates += existingPatchCount;
-		if (existingPatchCount > 0) {
-			updatesFound.patch = true;
-		}
+		// Check existing Content Update patch notes and Teaser posts only every 15 minutes
+		if (shouldCheckUpdates) {
+			console.log(`[${JOB_NAME}] Checking existing Content Update patch notes for updates`);
+			const { count: existingPatchCount } =
+				await checkExistingPatchNotesForUpdates(db, poeCookie);
+			newPatchUpdates += existingPatchCount;
+			if (existingPatchCount > 0) {
+				updatesFound.patch = true;
+			}
 
-		// Check existing Teaser posts for updates
-		console.log(`[${JOB_NAME}] Checking existing Teaser posts for updates`);
-		const { count: existingTeaserCount } =
-			await checkExistingTeasersForUpdates(db, poeCookie);
-		newTeaserUpdates += existingTeaserCount;
-		if (existingTeaserCount > 0) {
-			updatesFound.teaser = true;
+			console.log(`[${JOB_NAME}] Checking existing Teaser posts for updates`);
+			const { count: existingTeaserCount } =
+				await checkExistingTeasersForUpdates(db, poeCookie);
+			newTeaserUpdates += existingTeaserCount;
+			if (existingTeaserCount > 0) {
+				updatesFound.teaser = true;
+			}
 		}
 
 		console.log(`[${JOB_NAME}] Completed: ${totalScraped} scraped, ${totalNew} new items, ${newPatchUpdates} patch updates, ${newTeaserUpdates} teaser updates`);
@@ -1182,4 +1186,63 @@ export async function runNewsScraper(
 		newTeaserUpdates,
 		error: jobError?.message,
 	};
+}
+
+/**
+ * Returns true when the last successful scrape is older than STALE_THRESHOLD_MS
+ */
+export async function isNewsDataStale(db: Database): Promise<boolean> {
+	const rows = await db
+		.select({
+			lastRunCompletedAt: systemState.lastRunCompletedAt,
+		})
+		.from(systemState)
+		.where(eq(systemState.jobName, JOB_NAME))
+		.limit(1);
+
+	if (rows.length === 0 || !rows[0].lastRunCompletedAt) {
+		return true;
+	}
+
+	const completedAt = new Date(rows[0].lastRunCompletedAt).getTime();
+	return Date.now() - completedAt > STALE_THRESHOLD_MS;
+}
+
+/**
+ * Poll until scrape data is fresh or timeout (used when another request is already scraping)
+ */
+export async function waitUntilNewsDataFresh(
+	db: Database,
+	maxWaitMs = SCRAPER_WAIT_TIMEOUT_MS,
+): Promise<void> {
+	const deadline = Date.now() + maxWaitMs;
+
+	while (Date.now() < deadline) {
+		if (!await isNewsDataStale(db)) {
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 250));
+	}
+}
+
+/**
+ * Run the scraper when data is stale (>1 min since last successful scrape).
+ * If another invocation is already scraping, wait for it to finish.
+ */
+export async function ensureNewsDataFresh(
+	db: Database,
+	kv?: KVNamespace,
+	poeCookie?: string,
+): Promise<void> {
+	if (!await isNewsDataStale(db)) {
+		return;
+	}
+
+	console.log(`[${JOB_NAME}] Data stale, refreshing before API response`);
+
+	const result = await runNewsScraper(db, kv, poeCookie);
+
+	if (result.skipped) {
+		await waitUntilNewsDataFresh(db);
+	}
 }

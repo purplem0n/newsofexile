@@ -5,7 +5,7 @@
 	"scripts": {
 		"deploy": "npm run db:migrate && wrangler deploy",
 		"dev": "npm run db:migrate:local && wrangler dev --test-scheduled --port 9012",
-		"cron:test": "curl -X POST http://localhost:9012/__scheduled?cron=*+*+*+*+*",
+		"cron:test": "curl -X POST 'http://localhost:9012/__scheduled?cron=*/15+*+*+*+*'",
 		"start": "wrangler dev --port 9012",
 		"cf-typegen": "wrangler types",
 		"db:migrate": "wrangler d1 migrations apply newsofexile-db --remote",

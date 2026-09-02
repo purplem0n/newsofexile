@@ -39,8 +39,8 @@ export default {
 	) {
 		console.log(`[Scheduled] Cron triggered: ${controller.cron}`);
 
-		if (controller.cron === "* * * * *") {
-			// News scraper: every minute
+		if (controller.cron === "*/15 * * * *") {
+			// News scraper: every 15 minutes
 			try {
 				const db = createDb(env.DB);
 				const results = await runCronJobs(
